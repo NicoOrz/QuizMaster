@@ -49,7 +49,8 @@ export default function PracticePage() {
 
   const goToPreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev + 1);
+      // Corrected line: decrement the index
+      setCurrentQuestionIndex(prev => prev - 1);
     }
   };
 
