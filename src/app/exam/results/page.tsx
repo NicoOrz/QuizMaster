@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useEffect, useState } from 'react';
@@ -45,18 +46,7 @@ export default function ExamResultsPage() {
       // Ideally, fetch from Firestore here as a fallback
       console.warn(`Exam record with ID ${recordId} not found in local state.`);
       // For now, redirect home, but Firestore fetch is better
-      // router.push('/');
-      // Placeholder if needed:
-       setExamRecord({
-            id: recordId,
-            userId: 'unknown',
-            score: 0,
-            totalQuestions: 0,
-            correctCount: 0,
-            timestamp: Date.now(),
-            incorrectQuestions: [],
-            duration: 0,
-        });
+      router.push('/history'); // Redirect to history if record not found
     }
   }, [recordId, examHistory, router]);
 
@@ -76,7 +66,7 @@ export default function ExamResultsPage() {
   const scoreColor = examRecord.score >= 70 ? 'text-green-600' : examRecord.score >= 40 ? 'text-yellow-600' : 'text-red-600';
 
   return (
-    <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10">
+    <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10">
       <Button onClick={goToHome} variant="outline" className="absolute top-4 left-4">
           <Home className="mr-2 h-4 w-4" /> Back to Home
       </Button>
@@ -134,17 +124,19 @@ export default function ExamResultsPage() {
                                 explanation: item.explanation,
                                 image_url: item.image_url,
                              }}
-                             selectedAnswers={item.user_answer} // Show what the user selected
+                             selectedAnswers={item.user_answer} // Show what the user selected (for display)
                              onAnswerChange={() => {}} // No action needed in review
                              questionIndex={index} // Use accordion index for display purposes if needed
                              totalQuestions={incorrectQuestions.length}
-                             isReviewMode={true} // Enable review styling
-                             userAnswer={item.user_answer}
+                             revealAnswers={true} // Enable answer revealing
+                             userAnswer={item.user_answer} // Pass the user's actual answer
+                             isDisabled={true} // Disable inputs in review mode
                             />
                              <Separator className="my-4" />
                              <div className="mt-4 p-4 bg-secondary/50 rounded-md border border-border">
                                <h4 className="font-semibold mb-2">Explanation:</h4>
-                               <p className="text-sm whitespace-pre-wrap">{item.explanation || "No explanation provided."}</p>
+                               {/* Use whitespace-pre-wrap for explanation */}
+                               <p className="text-sm whitespace-pre-wrap text-muted-foreground">{item.explanation || "No explanation provided."}</p>
                                <p className="text-sm mt-2 font-medium">Correct Answer(s): <span className="text-green-600">{item.correct_answer.join(', ')}</span></p>
                              </div>
                          </AccordionContent>
@@ -157,7 +149,7 @@ export default function ExamResultsPage() {
       )}
 
        {incorrectQuestions.length === 0 && examRecord.totalQuestions > 0 && (
-        <Card className="w-full max-w-3xl shadow-lg rounded-lg bg-green-50 border-green-200">
+        <Card className="w-full max-w-3xl shadow-lg rounded-lg bg-green-50 border-green-200 mt-8">
           <CardContent className="p-6 text-center">
             <Check className="h-12 w-12 text-green-600 mx-auto mb-4" />
             <p className="text-xl font-semibold text-green-700">Congratulations! You answered all questions correctly!</p>
