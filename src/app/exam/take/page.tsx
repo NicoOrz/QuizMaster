@@ -1,8 +1,10 @@
- 
+
+"use client";
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuiz } from '@/context/QuizContext';
-import type { Question, UserAnswer, ExamRecord } from '@/types/quiz';
+import type { Question, UserAnswer, ExamRecord, ExamProgress } from '@/types/quiz';
 import { QuestionCard } from '@/components/quiz/QuestionCard';
 import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -14,94 +16,205 @@ import { QuizOverview } from '@/components/quiz/QuizOverview';
 import { saveExamRecord } from '@/services/firestoreService';
 import { useToast } from "@/hooks/use-toast";
 import { shuffleArray } from '@/lib/utils'; // Make sure shuffleArray is imported
+import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton
 
 export default function ExamTakePage({searchParams}: {searchParams: { numQuestions?: string }}) { // Added type for searchParams
-  const { questions: allQuestions, addExamRecord, examProgress, setExamProgress, clearExamProgress } = useQuiz();
+  const { questions: allQuestions, addExamRecord, examProgress, setExamProgress, clearExamProgress, isLoading: isContextLoading, isInitialized: isContextInitialized } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
   const requestedNumQuestionsParam = searchParams?.numQuestions; // Use optional chaining
 
   // --- State Initialization ---
-  // Attempt to load from context first, then generate new if needed
-  const [examQuestions, setExamQuestions] = useState<Question[]>(examProgress?.questions ?? []);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(examProgress?.currentIndex ?? 0);
-  const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>(examProgress?.answers ?? {});
-  const [examStartTime, setExamStartTime] = useState<number>(examProgress?.startTime ?? Date.now());
-  const [configNumQuestions, setConfigNumQuestions] = useState<number>(examProgress?.configNumQuestions ?? 0); // Store the requested number for saving
+  // Initialize with empty/default values, setup will happen in useEffect
+  const [examQuestions, setExamQuestions] = useState<Question[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
+  const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>({});
+  const [examStartTime, setExamStartTime] = useState<number>(Date.now());
+  const [configNumQuestions, setConfigNumQuestions] = useState<number>(0);
 
-  const [isInitialized, setIsInitialized] = useState(!!examProgress); // Track if loaded from progress
+  // Track if setup has run *in this component instance* to prevent duplicate setup
+  const [isLocallyInitialized, setIsLocallyInitialized] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
 
-  // --- Initialization Effect ---
+
+  // --- Initialization & Validation Effect ---
   useEffect(() => {
-    // If not loaded from existing progress and have questions, initialize a new exam
-    if (!isInitialized && allQuestions.length > 0) {
-        const requestedNum = parseInt(requestedNumQuestionsParam || '10', 10);
-        if (isNaN(requestedNum) || requestedNum <= 0) { // Check for NaN as well
+      // Wait until context is ready and local init hasn't run
+    if (isContextLoading || !isContextInitialized || isLocallyInitialized) {
+         return;
+    }
+
+     console.log("ExamTakePage: Context initialized, attempting to load or start exam.");
+     console.log("ExamTakePage: Existing examProgress:", examProgress);
+     console.log("ExamTakePage: Requested numQuestions:", requestedNumQuestionsParam);
+
+    // Check if we should RESUME an exam
+    if (examProgress && !requestedNumQuestionsParam) {
+      const { questions, currentIndex, answers, startTime, configNumQuestions: savedConfigNum } = examProgress;
+       // Basic validation of progress structure
+       if (Array.isArray(questions) && questions.length > 0 && typeof currentIndex === 'number' && typeof answers === 'object' && typeof startTime === 'number') {
+            console.log(`ExamTakePage: Resuming exam with ${questions.length} questions at index ${currentIndex}.`);
+            setExamQuestions(questions);
+            setCurrentQuestionIndex(currentIndex);
+            setUserAnswers(answers);
+            setExamStartTime(startTime);
+            setConfigNumQuestions(savedConfigNum ?? questions.length); // Fallback if configNumQuestions missing
+            setIsLocallyInitialized(true); // Mark local initialization complete
+       } else {
+            // Invalid progress structure found
+            console.warn("ExamTakePage: Invalid exam progress structure found. Clearing and redirecting.");
+            toast({ title: "Invalid Progress", description: "Clearing invalid session data and returning to configuration.", variant: "destructive" });
+            clearExamProgress();
+            router.replace('/exam/config'); // Use replace to prevent back navigation to broken state
+       }
+    }
+    // Check if we should START a NEW exam (explicitly requested via query param)
+    else if (requestedNumQuestionsParam && allQuestions.length > 0) {
+         console.log("ExamTakePage: Starting new exam based on query parameter.");
+        const requestedNum = parseInt(requestedNumQuestionsParam, 10);
+        if (isNaN(requestedNum) || requestedNum <= 0) {
+            console.error("ExamTakePage: Invalid number of questions requested:", requestedNumQuestionsParam);
             toast({ title: "Exam Configuration Error", description: "Invalid number of questions requested. Redirecting.", variant: "destructive" });
-            router.push('/exam/config');
-            return;
+            router.replace('/exam/config');
+            return; // Exit effect
         }
 
         const numToTake = Math.min(requestedNum, allQuestions.length);
         if (numToTake === 0) {
-             toast({ title: "No Questions Available", description: "Cannot start exam with zero questions.", variant: "destructive" });
-             router.push('/');
+            console.warn("ExamTakePage: Cannot start exam with zero questions.");
+            toast({ title: "No Questions Available", description: "Cannot start exam with zero questions.", variant: "destructive" });
+             router.replace('/'); // Redirect home if no questions
              return;
+        }
+
+        // Clear any old progress before starting new
+        // Note: Config page might have already done this, but ensures clean state here
+        if (examProgress) {
+            console.log("ExamTakePage: Clearing existing exam progress before starting new one.");
+            clearExamProgress();
         }
 
         const shuffled = shuffleArray(allQuestions);
         const selectedQuestions = shuffled.slice(0, numToTake);
         const startTime = Date.now();
+        const initialAnswers: Record<number, UserAnswer> = {};
+         selectedQuestions.forEach(q => {
+           initialAnswers[q.question_number] = { question_number: q.question_number, selected_answers: [] };
+         });
 
+        console.log(`ExamTakePage: Initializing new exam with ${numToTake} questions.`);
         setExamQuestions(selectedQuestions);
         setCurrentQuestionIndex(0);
-        setUserAnswers({});
+        setUserAnswers(initialAnswers);
         setExamStartTime(startTime);
         setConfigNumQuestions(numToTake); // Store the actual number taken
-        setIsInitialized(true); // Mark as initialized
+        setIsLocallyInitialized(true); // Mark local initialization complete
 
-         console.log("Initialized new exam with", numToTake, "questions.");
-
-         // Save initial state to context/localStorage
+        // Save initial state to context/localStorage immediately
          setExamProgress({
             questions: selectedQuestions,
             currentIndex: 0,
-            answers: {},
+            answers: initialAnswers,
             startTime: startTime,
             configNumQuestions: numToTake,
          });
+         console.log("ExamTakePage: New exam progress saved to context.");
 
-    } else if (allQuestions.length === 0 && !examProgress) {
-      // If no questions and no progress, redirect
-      toast({ title: "No Questions Loaded", description: "Redirecting to import page.", variant: "destructive" });
-      router.push('/');
-    } else if (isInitialized && examProgress && examQuestions.length === 0) {
-        // This case might mean invalid progress was loaded
-        toast({ title: "Exam State Error", description: "Invalid exam progress detected. Clearing and redirecting.", variant: "destructive" });
-        clearExamProgress();
-        router.push('/exam/config');
     }
+     // If no query param, no existing progress, and no questions loaded yet (but context initialized)
+     else if (!requestedNumQuestionsParam && !examProgress && allQuestions.length === 0 && isContextInitialized && !isContextLoading) {
+         console.warn("ExamTakePage: No questions loaded and no progress. Redirecting to import.");
+        toast({ title: "No Questions Loaded", description: "Please import a question bank first.", variant: "destructive" });
+        router.replace('/');
+     }
+     // If no query param and no existing progress, but questions ARE loaded -> redirect to config
+     else if (!requestedNumQuestionsParam && !examProgress && allQuestions.length > 0) {
+         console.log("ExamTakePage: Questions loaded, but no specific exam requested/resumed. Redirecting to config.");
+         router.replace('/exam/config');
+     }
+     // Catch-all for unexpected states after initialization attempt
+     else if (isLocallyInitialized && examQuestions.length === 0) {
+         // This shouldn't happen if logic above is correct, but as a safeguard
+         console.error("ExamTakePage: State Error - Locally initialized but no exam questions set. Redirecting.");
+         toast({ title: "Exam State Error", description: "Inconsistent exam state detected. Returning to configuration.", variant: "destructive" });
+         clearExamProgress(); // Clear potentially inconsistent state
+         router.replace('/exam/config');
+     }
 
-  }, [allQuestions, requestedNumQuestionsParam, router, toast, isInitialized, examProgress, setExamProgress, clearExamProgress, examQuestions.length]); // Added examProgress dependencies
+  }, [
+      allQuestions,
+      requestedNumQuestionsParam,
+      router,
+      toast,
+      examProgress,
+      setExamProgress,
+      clearExamProgress,
+      isContextLoading,
+      isContextInitialized,
+      isLocallyInitialized // Depend on local init state
+  ]);
 
 
    // --- Effect to Save Progress ---
    useEffect(() => {
-     // Only save progress if the exam is initialized and has questions
-     if (isInitialized && examQuestions.length > 0) {
-        setExamProgress(prev => ({
-            // Use existing questions/startTime/configNum if available, otherwise update
-            questions: prev?.questions ?? examQuestions,
-            startTime: prev?.startTime ?? examStartTime,
-            configNumQuestions: prev?.configNumQuestions ?? configNumQuestions,
-            // Update current index and answers
-            currentIndex: currentQuestionIndex,
-            answers: userAnswers,
-        }));
+     // Only save progress if the exam is locally initialized and has questions
+     if (isLocallyInitialized && examQuestions.length > 0) {
+         // Check if examProgress is actually defined before trying to update
+         if (examProgress) {
+             setExamProgress(prev => {
+                // Ensure prev is not null/undefined before spreading
+                 if (!prev) {
+                     console.warn("ExamTakePage: Attempted to save progress, but previous progress state was null. Re-initializing.");
+                     // This might indicate a race condition or error, re-save the full current state
+                     return {
+                         questions: examQuestions,
+                         startTime: examStartTime,
+                         configNumQuestions: configNumQuestions,
+                         currentIndex: currentQuestionIndex,
+                         answers: userAnswers,
+                     };
+                 }
+
+                 const newState: ExamProgress = {
+                     ...prev, // Keep potentially other fields from prev if any
+                     questions: examQuestions, // Always save current questions
+                     startTime: examStartTime, // Always save current start time
+                     configNumQuestions: configNumQuestions, // Always save current config
+                     currentIndex: currentQuestionIndex,
+                     answers: userAnswers,
+                 };
+
+                 // Simple comparison to avoid unnecessary updates if nothing changed
+                 if (prev.currentIndex !== newState.currentIndex || JSON.stringify(prev.answers) !== JSON.stringify(newState.answers)) {
+                    // console.log("ExamTakePage: Saving updated exam progress to context.");
+                    return newState;
+                 }
+                 // console.log("ExamTakePage: Skipping progress save, no change detected.");
+                 return prev; // No change needed
+             });
+         } else {
+             // If examProgress is null, save the initial state again (should have happened in init effect, but safeguard)
+              console.warn("ExamTakePage: examProgress was null during save attempt. Saving current state.");
+              setExamProgress({
+                  questions: examQuestions,
+                  startTime: examStartTime,
+                  configNumQuestions: configNumQuestions,
+                  currentIndex: currentQuestionIndex,
+                  answers: userAnswers,
+              });
+         }
      }
-   }, [currentQuestionIndex, userAnswers, setExamProgress, isInitialized, examQuestions, examStartTime, configNumQuestions]);
+   }, [
+       currentQuestionIndex,
+       userAnswers,
+       setExamProgress,
+       isLocallyInitialized,
+       examQuestions, // Include as dependency
+       examStartTime, // Include as dependency
+       configNumQuestions, // Include as dependency
+       examProgress // Include examProgress to react to it becoming available/null
+   ]);
 
 
   // --- Event Handlers ---
@@ -121,6 +234,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
           newSelectedAnswers = currentAnswer.selected_answers.filter(ans => ans !== answerKey);
         }
       } else {
+        // For RadioGroup, replace the selection
         newSelectedAnswers = [answerKey];
       }
       return {
@@ -128,23 +242,25 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
         [questionNumber]: { ...currentAnswer, selected_answers: newSelectedAnswers.sort() }
       };
     });
-  }, [examQuestions]);
+  }, [examQuestions]); // Only depends on the loaded exam questions
 
   const goToNextQuestion = useCallback(() => {
+    // Use the state directly, no need for functional update if dependencies are correct
     if (currentQuestionIndex < examQuestions.length - 1) {
-      setCurrentQuestionIndex(prev => prev + 1); // Functional update is safe
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
     }
-  }, [currentQuestionIndex, examQuestions.length]); // Dependencies are correct
+  }, [currentQuestionIndex, examQuestions.length]);
 
   const goToPreviousQuestion = useCallback(() => {
+     // Use the state directly
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev - 1); // Functional update is safe
+      setCurrentQuestionIndex(currentQuestionIndex - 1);
     }
   }, [currentQuestionIndex]);
 
   const goToHome = useCallback(() => {
     // Decide if progress should be cleared when manually going home
-    // clearExamProgress(); // Currently progress persists unless submitted or explicitly cleared
+    // Currently progress persists unless submitted or explicitly cleared
     router.push('/');
   }, [router]);
 
@@ -156,7 +272,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
   }, [examQuestions.length]);
 
   const handleSubmitExam = useCallback(async () => {
-    if (isSubmitting) return;
+    if (isSubmitting || !isLocallyInitialized || examQuestions.length === 0) return; // Add checks
     setIsSubmitting(true);
     toast({ title: "Submitting Exam...", description: "Calculating your results." });
 
@@ -188,50 +304,98 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
 
     const score = examQuestions.length > 0 ? (correctCount / examQuestions.length) * 100 : 0;
     const examEndTime = Date.now();
-    const duration = Math.round((examEndTime - examStartTime) / 1000); // Duration in seconds
+    // Ensure examStartTime is valid before calculating duration
+    const duration = examStartTime ? Math.round((examEndTime - examStartTime) / 1000) : 0; // Duration in seconds
 
     const recordData = {
-      userId: 'anonymous',
+      userId: 'anonymous', // TODO: Replace with actual user ID if authentication is added
       score: parseFloat(score.toFixed(2)),
       totalQuestions: examQuestions.length,
       correctCount: correctCount,
       incorrectQuestions: incorrectQuestionsDetail,
       duration: duration,
+      // timestamp is handled by Firestore or context.addExamRecord
     };
 
     try {
+      console.log("ExamTakePage: Saving exam record to Firestore:", recordData);
       const docId = await saveExamRecord(recordData);
+      const finalTimestamp = Date.now(); // Use final submission time for local record consistency
       const fullRecord: ExamRecord = {
         ...recordData,
         id: docId,
-        timestamp: examStartTime, // Use start time for local display consistency
+        timestamp: finalTimestamp,
       };
-      addExamRecord(fullRecord); // This also clears examProgress via context
+      console.log("ExamTakePage: Adding exam record to context history:", fullRecord);
+      addExamRecord(fullRecord); // This should also clear examProgress via context
       toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
       router.push(`/exam/results?recordId=${docId}`);
     } catch (error) {
-      console.error("Failed to save exam record:", error);
+      console.error("ExamTakePage: Failed to save exam record:", error);
       toast({ title: "Submission Failed", description: "Could not save exam results. Please try again.", variant: "destructive" });
-      setIsSubmitting(false);
+      setIsSubmitting(false); // Allow retry on failure
     }
-  }, [examQuestions, userAnswers, examStartTime, addExamRecord, router, toast, isSubmitting]);
+     // No finally block needed to set submitting false, success navigates away
+  }, [
+      isSubmitting,
+      isLocallyInitialized, // Depend on local init
+      examQuestions,
+      userAnswers,
+      examStartTime,
+      addExamRecord,
+      router,
+      toast,
+      // clearExamProgress is implicitly called by addExamRecord, so not needed here
+  ]);
 
 
    // --- Render Logic ---
-  if (!isInitialized || examQuestions.length === 0) {
-    return <div className="container mx-auto p-4 text-center">Loading exam...</div>;
+   // Loading state: wait for context AND local initialization
+  if (isContextLoading || !isContextInitialized || !isLocallyInitialized) {
+     return (
+       <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 space-y-6">
+           <div className="absolute top-4 left-4 z-20 flex space-x-2">
+                <Skeleton className="h-9 w-24" /> {/* Exit Button */}
+           </div>
+           <Skeleton className="h-9 w-36 absolute top-4 right-4 z-20" /> {/* Overview Button */}
+           <Skeleton className="h-8 w-32 mt-12" /> {/* Title */}
+           <Skeleton className="w-full max-w-4xl h-4 mb-1" /> {/* Progress Bar */}
+            <Skeleton className="h-4 w-40 mb-4" /> {/* Progress Text */}
+           <div className="w-full max-w-4xl space-y-4">
+                <Skeleton className="h-60 w-full" /> {/* Question Card Skeleton */}
+           </div>
+           <Skeleton className="w-full max-w-4xl h-16 mt-6" /> {/* Navigation Card Skeleton */}
+       </div>
+     );
   }
 
+  // If initialization finished but somehow no questions are loaded (should be caught by redirect earlier)
+  if (examQuestions.length === 0) {
+      console.error("ExamTakePage: Render reached with zero questions after initialization.");
+      return <div className="container mx-auto p-4 text-center">Error: No exam questions loaded.</div>;
+  }
+
+   // Validate currentQuestionIndex before accessing examQuestions
+   if (currentQuestionIndex < 0 || currentQuestionIndex >= examQuestions.length) {
+        console.error(`ExamTakePage: Invalid currentQuestionIndex (${currentQuestionIndex}) for ${examQuestions.length} questions. Resetting.`);
+        // Attempt to recover by setting index to 0, but this indicates a state issue.
+        setCurrentQuestionIndex(0);
+        // Show a loading/error state momentarily while index resets
+        return <div className="container mx-auto p-4 text-center">Correcting question index...</div>;
+   }
+
+
   const currentQuestion = examQuestions[currentQuestionIndex];
+  // This check should ideally not be needed if index validation above works, but as a safeguard:
   if (!currentQuestion) {
-    // This might happen if index is out of bounds briefly during initialization or state mismatch
-    console.warn(`Current question not found at index ${currentQuestionIndex}. Total questions: ${examQuestions.length}.`);
-    // Optional: Redirect or show a more specific loading/error state
-    return <div className="container mx-auto p-4 text-center">Loading question data...</div>;
+     console.error(`ExamTakePage: currentQuestion is null/undefined at index ${currentQuestionIndex}.`);
+     return <div className="container mx-auto p-4 text-center">Error loading current question data.</div>;
   }
 
   const currentQuestionNumber = currentQuestion.question_number;
   const progress = ((currentQuestionIndex + 1) / examQuestions.length) * 100;
+  // Get current selection for the card, ensuring safety
+  const currentSelection = userAnswers[currentQuestionNumber]?.selected_answers || [];
 
   return (
     <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 relative">
@@ -239,7 +403,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
         <div className="absolute top-4 left-4 z-20 flex space-x-2">
             <AlertDialog>
                 <AlertDialogTrigger asChild>
-                    <Button variant="outline">
+                    <Button variant="outline" disabled={isSubmitting}>
                         <LogOut className="mr-2 h-4 w-4" /> Exit Exam
                     </Button>
                 </AlertDialogTrigger>
@@ -262,7 +426,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
       {/* Overview Sheet Trigger */}
       <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
         <SheetTrigger asChild>
-          <Button variant="outline" className="absolute top-4 right-4 z-20">
+          <Button variant="outline" className="absolute top-4 right-4 z-20" disabled={isSubmitting}>
             <List className="mr-2 h-4 w-4" /> Overview
           </Button>
         </SheetTrigger>
@@ -289,15 +453,21 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
       </div>
 
       <div className="w-full max-w-4xl">
-        <QuestionCard
-          key={currentQuestionNumber}
-          question={currentQuestion}
-          selectedAnswers={userAnswers[currentQuestionNumber]?.selected_answers || []}
-          onAnswerChange={(answerKey, checked) => handleAnswerChange(currentQuestionNumber, answerKey, checked)}
-          questionIndex={currentQuestionIndex}
-          totalQuestions={examQuestions.length}
-          isDisabled={isSubmitting}
-        />
+        {/* Ensure currentQuestion is valid before rendering QuestionCard */}
+         {currentQuestion && (
+             <QuestionCard
+               key={currentQuestionNumber} // Use question_number as key
+               question={currentQuestion}
+               selectedAnswers={currentSelection} // Pass validated selection
+               onAnswerChange={handleAnswerChange}
+               questionIndex={currentQuestionIndex}
+               totalQuestions={examQuestions.length}
+               isDisabled={isSubmitting}
+               // Pass original number for consistency, though it's same as question.question_number in exam
+               practiceQuestionNumber={currentQuestion.question_number}
+               // revealAnswers and userAnswer are not used in exam mode before submission
+             />
+         )}
       </div>
 
       <Card className="w-full max-w-4xl mx-auto mt-6 shadow-md rounded-lg">
