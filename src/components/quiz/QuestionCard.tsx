@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import React from 'react';
@@ -24,6 +25,7 @@ interface QuestionCardProps {
 const isValidUrl = (urlString: string | undefined): boolean => {
   if (!urlString) return false;
   try {
+    // Use a robust regex or rely on the browser's URL constructor
     new URL(urlString);
     return true;
   } catch (_) {
@@ -67,10 +69,11 @@ export function QuestionCard({
 
   // --- Image Proxy and Validation Logic ---
   const placeholderUrl = `https://picsum.photos/seed/${question.question_number}/600/400`;
-  let finalImageUrl: string = placeholderUrl; // Default to placeholder
+  let finalImageUrl: string | null = null; // Default to null initially
 
   // Decide if the image needs proxying. Proxy images from modb.pro
-  const needsProxy = (url: string): boolean => {
+  const needsProxy = (url: string | undefined): boolean => {
+    if (!url) return false;
     try {
         const hostname = new URL(url).hostname;
         // Add other domains that require proxying if necessary
@@ -89,18 +92,16 @@ export function QuestionCard({
             // console.log(`Using proxy for image: ${originalUrl} -> ${finalImageUrl}`);
         } catch (error) {
             console.error("Error encoding image URL for proxy:", originalUrl, error);
-            finalImageUrl = placeholderUrl; // Fallback on encoding error
+            // Don't set a placeholder here, let it remain null
         }
     } else {
         finalImageUrl = originalUrl; // Use original valid URL if no proxy needed
     }
   } else {
      if (question.image_url) { // Log only if an invalid URL was actually provided
-       console.warn(`Invalid image URL provided for Q#${question.question_number}, using placeholder: ${question.image_url}`);
-     } else {
-        // console.log(`No image URL for Q#${question.question_number}, using placeholder.`);
+       console.warn(`Invalid image URL provided for Q#${question.question_number}: ${question.image_url}`);
      }
-     finalImageUrl = placeholderUrl; // Ensure placeholder if original is invalid or missing
+     // Keep finalImageUrl null if original is invalid or missing
   }
   // --- End Image Proxy and Validation Logic ---
 
@@ -111,7 +112,7 @@ export function QuestionCard({
         <CardTitle className="text-lg font-semibold">
           Question {questionIndex + 1} of {totalQuestions}
         </CardTitle>
-         {/* Use finalImageUrl which is guaranteed to be a valid URL string (either original, proxied, or placeholder) */}
+         {/* Conditionally render the image container only if finalImageUrl is set */}
          {finalImageUrl && (
           <div className="mt-4 mb-4 relative h-60 w-full">
             <Image
@@ -120,19 +121,14 @@ export function QuestionCard({
               fill
               style={{ objectFit: 'contain' }}
               className="rounded-md"
-              // Unoptimize if using the proxy OR if it's the placeholder (picsum optimization might not be needed/wanted)
-              unoptimized={needsProxy(question.image_url || '') || finalImageUrl === placeholderUrl}
+              // Unoptimize if using the proxy
+              unoptimized={needsProxy(question.image_url)}
               onError={(e) => {
                 console.error(`Error loading image for Q#${question.question_number}: ${finalImageUrl}`, e);
-                // Attempt to set to the known placeholder URL on error
-                // Note: This might trigger another onError if the placeholder itself fails, creating a loop.
-                // Consider adding a state to prevent infinite loops if necessary.
+                // Optionally set to a broken image placeholder or hide the element
                 const target = e.target as HTMLImageElement;
-                if (target.src !== placeholderUrl) {
-                     target.src = placeholderUrl;
-                     target.srcset = ""; // Clear srcset if it exists
-                     console.warn(`Falling back to placeholder for Q#${question.question_number}`);
-                }
+                target.style.display = 'none'; // Hide the broken image
+                console.warn(`Hiding image due to loading error for Q#${question.question_number}`);
               }}
               priority={questionIndex === 0} // Prioritize loading the first image
             />
