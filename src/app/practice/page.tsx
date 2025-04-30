@@ -14,9 +14,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { QuizOverview } from '@/components/quiz/QuizOverview';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast"; // Import useToast
+import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton for loading
 
 export default function PracticePage() {
-  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isLoading: isContextLoading } = useQuiz();
+  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isInitialized: isContextInitialized, isLoading: isContextLoading } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -29,7 +30,7 @@ export default function PracticePage() {
   const [showAnswer, setShowAnswer] = useState(false);
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
-  const [isInitialized, setIsInitialized] = useState(false); // Track initialization
+  const [isComponentInitialized, setIsComponentInitialized] = useState(false); // Track local initialization
   const [shouldRedirect, setShouldRedirect] = useState(false); // State to trigger redirect effect
 
   // Derived state for the current question based on index
@@ -39,161 +40,184 @@ export default function PracticePage() {
   // --- Initialization and Validation Effect ---
   useEffect(() => {
      // Wait for context to finish loading before initializing
-     if (isContextLoading) return;
+     if (isContextLoading || !isContextInitialized) {
+         console.log("PracticePage: Waiting for context to initialize...");
+         return;
+     }
+
+     console.log("PracticePage: Context initialized. Checking practiceProgress:", practiceProgress);
 
      if (practiceProgress && practiceProgress.questions.length > 0) {
-        // Load state from context
-        setPracticeQuestions(practiceProgress.questions);
-        setCurrentQuestionIndex(practiceProgress.currentIndex);
-        setCurrentSelections(practiceProgress.selections);
-        setIsInitialized(true); // Mark as initialized
-         // Reset feedback for the initially loaded question
-         setShowAnswer(false);
-         setIsCorrect(null);
-        console.log("Practice session loaded from progress.", practiceProgress);
-     } else {
-         // No valid progress found (or context still loading)
-         // Only trigger redirect if not loading and no progress found
-         if (!isContextLoading) {
+        // Validate progress data before setting state
+        const questionsExist = Array.isArray(practiceProgress.questions) && practiceProgress.questions.length > 0;
+        const indexIsValid = typeof practiceProgress.currentIndex === 'number' &&
+                              practiceProgress.currentIndex >= 0 &&
+                              practiceProgress.currentIndex < practiceProgress.questions.length;
+        const selectionsExist = typeof practiceProgress.selections === 'object' && practiceProgress.selections !== null;
+
+        if (questionsExist && indexIsValid && selectionsExist) {
+             // Load state from valid context
+             setPracticeQuestions(practiceProgress.questions);
+             setCurrentQuestionIndex(practiceProgress.currentIndex);
+             setCurrentSelections(practiceProgress.selections);
+             setIsComponentInitialized(true); // Mark local component as initialized *after* setting state
+             // Reset feedback for the initially loaded question
+             setShowAnswer(false);
+             setIsCorrect(null);
+             console.log("Practice session loaded successfully from progress.", practiceProgress);
+        } else {
+             // Invalid progress data found in context
+             console.warn("PracticePage: Invalid practice progress structure found in context. Clearing and redirecting.", practiceProgress);
              toast({
-                 title: "No Practice Session",
-                 description: "No active practice session found. Redirecting to configuration.",
-                 variant: "destructive",
+                title: "Invalid Progress",
+                description: "Invalid practice session data found. Clearing and redirecting.",
+                variant: "destructive",
              });
-             setShouldRedirect(true); // Set state to trigger redirect effect
-         }
+             clearPracticeProgress(); // Clear the invalid data from context/storage
+             setShouldRedirect(true);
+        }
+     } else {
+         // No valid progress found in context
+         console.log("PracticePage: No active practice session found in context. Redirecting.");
+         toast({
+             title: "No Practice Session",
+             description: "No active practice session found. Redirecting to configuration.",
+             variant: "destructive",
+         });
+         setShouldRedirect(true); // Set state to trigger redirect effect
      }
-  }, [practiceProgress, isContextLoading, toast]); // Remove router dependency here
+  }, [practiceProgress, isContextLoading, isContextInitialized, toast, clearPracticeProgress]); // Add isContextInitialized dependency
 
   // --- Redirect Effect ---
    useEffect(() => {
     if (shouldRedirect) {
+        console.log("PracticePage: Triggering redirect to /practice/config");
         router.replace('/practice/config'); // Use replace to avoid adding to history
     }
    }, [shouldRedirect, router]);
 
    // Effect to reset feedback when index changes *after* initialization
     useEffect(() => {
-        if (isInitialized) {
+        // Only run if the component has successfully initialized
+        if (isComponentInitialized) {
+            console.log(`PracticePage: Index changed to ${currentQuestionIndex}. Resetting feedback.`);
             setShowAnswer(false);
             setIsCorrect(null);
         }
-    }, [currentQuestionIndex, isInitialized]);
+    }, [currentQuestionIndex, isComponentInitialized]);
 
 
   // Effect to update practice progress in context whenever index or selections change
   useEffect(() => {
-    // Only save if initialized and there are questions
-    if (isInitialized && practiceQuestions.length > 0) {
+    // Only save if component initialized, context initialized, and there are questions
+    if (isComponentInitialized && isContextInitialized && practiceQuestions.length > 0) {
         setPracticeProgress(prev => {
-            // If there's no previous progress context (e.g., cleared), don't try to update it.
-            // This might happen if clearPracticeProgress is called concurrently.
-            if (!prev) return null;
+            if (!prev) {
+                // Should not happen if isComponentInitialized is true, but safety check
+                console.warn("PracticePage: setPracticeProgress called but previous context state is null.");
+                return null;
+            }
 
             // Create the potential new state based *only* on current local state
             const newState: PracticeProgress = {
                 ...prev, // Keep existing range, etc. from the previous valid state
                 currentIndex: currentQuestionIndex,
                 selections: currentSelections,
-                questions: practiceQuestions, // Ensure questions are also up-to-date in the progress object
+                questions: practiceQuestions, // Ensure questions are also up-to-date
                 range: prev.range // Explicitly carry over the range
             };
 
-            // Check if essential parts have changed compared to the existing progress state (prev)
-            // This prevents unnecessary updates if the state object reference changes but content is the same.
+            // Prevent unnecessary updates if the state object reference changes but content is the same.
              if (prev.currentIndex !== currentQuestionIndex ||
-                 JSON.stringify(prev.selections) !== JSON.stringify(currentSelections) || // Deep compare selections
-                 prev.questions !== practiceQuestions) { // Check if the question set changed (e.g., reconfigured)
-                // console.log("Practice progress updated in context/localStorage.");
-                return newState; // Return the new state object
+                 JSON.stringify(prev.selections) !== JSON.stringify(currentSelections) ||
+                 prev.questions !== practiceQuestions)
+             {
+                 // console.log("Practice progress updated in context/localStorage.");
+                 return newState;
              }
 
-            // If nothing relevant changed, return the previous state object reference to prevent infinite loops
             // console.log("Skipping practice progress update, no change detected.");
             return prev;
         });
     }
   }, [
-      isInitialized,
-      practiceQuestions, // Depends on the current set of questions
-      currentQuestionIndex, // Depends on the current index
-      currentSelections, // Depends on the current selections object
-      setPracticeProgress // Depends on the context setter function
-  ]); // Remove direct dependency on `practiceProgress` itself
+      isComponentInitialized,
+      isContextInitialized, // Ensure context is ready too
+      practiceQuestions,
+      currentQuestionIndex,
+      currentSelections,
+      setPracticeProgress
+  ]);
 
 
   // Handle changes to the selected answers for the current question
-  // Wrapped in useCallback to ensure stability when passed to QuestionCard
   const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
     if (showAnswer) return; // Don't allow changes if answer is revealed
 
-    // Use functional update form of setState for reliability
     setCurrentSelections(prevSelections => {
       const previousQuestionSelection = prevSelections[questionNumber] || [];
+      // Find question in the *local state* which should be initialized by now
       const question = practiceQuestions.find(q => q.question_number === questionNumber);
-      if (!question) return prevSelections; // Return previous state if question not found
+      if (!question) {
+          console.warn(`handleAnswerChange: Question #${questionNumber} not found in local state.`);
+          return prevSelections;
+      }
 
       const isMultipleChoice = question.correct_answer.length > 1;
       let newSelection: string[];
 
       if (isMultipleChoice) {
         if (checked) {
-          // Add answerKey if checked, avoid duplicates
           newSelection = Array.from(new Set([...previousQuestionSelection, answerKey])).sort();
         } else {
-          // Remove answerKey if unchecked
           newSelection = previousQuestionSelection.filter(ans => ans !== answerKey).sort();
         }
       } else {
-        // Single choice logic: always replace the selection
-        newSelection = [answerKey]; // Already sorted as it has one element
+        newSelection = [answerKey];
       }
 
       // Optimization: Check if the actual selection for this question *changed*
       if (
         previousQuestionSelection.length === newSelection.length &&
-        previousQuestionSelection.every((val, index) => val === newSelection[index]) // Assumes both are sorted
+        previousQuestionSelection.every((val, index) => val === newSelection[index])
        ) {
-         return prevSelections; // Return the previous state object reference if no change occurred
+         return prevSelections;
       }
 
-      // Create a *new* state object only if there was a change
-      // console.log(`Answer changed for Q#${questionNumber}: ${newSelection}`);
        return {
          ...prevSelections,
          [questionNumber]: newSelection,
-       }; // Return the new state object
+       };
     });
-  }, [showAnswer, practiceQuestions]); // Depend on showAnswer and practiceQuestions
+  }, [showAnswer, practiceQuestions]); // Depend on practiceQuestions (local state)
 
 
   // Check the answer for the current question
   const checkAnswer = useCallback(() => {
-    if (!currentQuestion || !currentQuestionNumber) return; // Ensure question exists
+    // Ensure question exists (use local state derived value)
+    if (!currentQuestion || !currentQuestionNumber) {
+        console.warn("checkAnswer: Current question data is missing.");
+        return;
+    }
 
     const userSelection = currentSelections[currentQuestionNumber] || [];
 
-    // Require a selection before checking, unless already showing answer
     if (userSelection.length === 0 && !showAnswer) {
         toast({ title: "No Answer Selected", description: "Please select an answer before checking.", variant: "default" });
         return;
     }
 
-     // If already showing answer, do nothing.
-     if (showAnswer) return;
-
+     if (showAnswer) return; // Already showing answer
 
     const correctAnswers = currentQuestion.correct_answer;
-    const sortedSelected = [...userSelection].sort(); // Ensure it's sorted for comparison
+    const sortedSelected = [...userSelection].sort();
     const sortedCorrect = [...correctAnswers].sort();
 
     const correct = sortedSelected.length === sortedCorrect.length &&
                     sortedSelected.every((value, index) => value === sortedCorrect[index]);
 
-    // console.log(`Checking Q#${currentQuestionNumber}: Selected=${sortedSelected}, Correct=${sortedCorrect}, Result=${correct}`);
     setIsCorrect(correct);
     setShowAnswer(true); // Reveal feedback
-    // Progress saving is handled by the useEffect watching currentSelections/currentQuestionIndex
   }, [currentQuestion, currentQuestionNumber, currentSelections, showAnswer, toast]);
 
 
@@ -201,14 +225,12 @@ export default function PracticePage() {
   const goToNextQuestion = useCallback(() => {
     if (currentQuestionIndex < practiceQuestions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
-      // Feedback state reset is handled by the index change effect
     }
   }, [currentQuestionIndex, practiceQuestions.length]);
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev - 1); // Corrected logic
-      // Feedback state reset is handled by the index change effect
+      setCurrentQuestionIndex(prev => prev - 1);
     }
   }, [currentQuestionIndex]);
 
@@ -217,12 +239,11 @@ export default function PracticePage() {
     if (index >= 0 && index < practiceQuestions.length) {
       setCurrentQuestionIndex(index);
       setIsSheetOpen(false);
-       // Feedback state reset is handled by the index change effect
     }
   }, [practiceQuestions.length]);
 
   const goToHome = useCallback(() => {
-    router.push('/'); // Progress is saved automatically
+    router.push('/'); // Progress is saved automatically by useEffect
   }, [router]);
 
    const goToConfig = useCallback(() => {
@@ -238,17 +259,48 @@ export default function PracticePage() {
 
 
   // --- Render Logic ---
-  // Use isContextLoading or shouldRedirect to show loading/redirecting state
-  if (isContextLoading || shouldRedirect || (!isInitialized && !practiceProgress)) {
-     return <div className="container mx-auto p-4 text-center">Loading practice session...</div>;
+  // Loading States:
+  // 1. Context is still loading/initializing.
+  // 2. Context is initialized, but local component hasn't loaded state yet.
+  // 3. Redirect is pending.
+  if (isContextLoading || !isContextInitialized || !isComponentInitialized || shouldRedirect) {
+     return (
+         <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 space-y-6">
+             {/* Skeleton Header */}
+             <div className="absolute top-4 left-4 z-20 flex space-x-2">
+                 <Skeleton className="h-9 w-24" /> {/* Home */}
+                 <Skeleton className="h-9 w-28" /> {/* Configure */}
+                 <Skeleton className="h-9 w-9 rounded-md" /> {/* Reset */}
+             </div>
+             <Skeleton className="h-9 w-36 absolute top-4 right-4 z-20" /> {/* Overview */}
+
+             {/* Skeleton Title */}
+             <Skeleton className="h-8 w-48 mt-12" />
+             <Skeleton className="h-4 w-64 mb-6" /> {/* Range */}
+
+             {/* Skeleton Question Card */}
+             <div className="w-full max-w-4xl space-y-4">
+                 <Skeleton className="h-60 w-full" /> {/* Placeholder for card content */}
+             </div>
+
+             {/* Skeleton Navigation */}
+             <Skeleton className="w-full max-w-4xl h-16 mt-6" />
+         </div>
+     );
   }
 
-  // If initialized and currentQuestion is somehow still undefined (should happen only if redirect isn't triggered fast enough)
+  // After initialization, check if currentQuestion is valid (safety net)
+  // This should ideally not be reached if initialization logic is correct
   if (!currentQuestion) {
-      // This case should ideally be covered by the redirect logic now.
-      // If it still occurs, log an error but avoid rendering potentially broken UI.
-      console.error("Current question is undefined after initialization. Practice state might be inconsistent.");
-      return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
+      console.error("PracticePage Render: Current question is undefined after initialization checks. State might be inconsistent.");
+      // Avoid rendering potentially broken UI, maybe show a specific error message or redirect again
+      return (
+          <div className="container mx-auto p-4 min-h-screen flex flex-col items-center justify-center text-center">
+              <h1 className="text-2xl font-bold mb-4 text-destructive">Error Loading Question</h1>
+              <p className="text-muted-foreground mb-6">Could not load the current question data. Please try configuring again.</p>
+              <Button onClick={goToConfig}>Go to Configuration</Button>
+          </div>
+      );
   }
 
 
