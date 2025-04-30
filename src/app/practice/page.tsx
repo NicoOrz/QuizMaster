@@ -16,16 +16,14 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/hooks/use-toast"; // Import useToast
 
 export default function PracticePage() {
-  const { practiceProgress, setPracticeProgress, clearPracticeProgress } = useQuiz();
+  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isLoading: isContextLoading } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
 
-  // State derived from practiceProgress
-  const [practiceQuestions, setPracticeQuestions] = useState<Question[]>(practiceProgress?.questions ?? []);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(() => practiceProgress?.currentIndex ?? 0);
-  const [currentSelections, setCurrentSelections] = useState<Record<number, string[]>>(
-    () => practiceProgress?.selections ?? {}
-  );
+  // State derived from practiceProgress - initialize safely
+  const [practiceQuestions, setPracticeQuestions] = useState<Question[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
+  const [currentSelections, setCurrentSelections] = useState<Record<number, string[]>>({});
 
   // Local UI state
   const [showAnswer, setShowAnswer] = useState(false);
@@ -39,6 +37,9 @@ export default function PracticePage() {
 
   // --- Initialization and Validation Effect ---
   useEffect(() => {
+     // Wait for context to finish loading before initializing
+     if (isContextLoading) return;
+
      if (practiceProgress && practiceProgress.questions.length > 0) {
         // Load state from context
         setPracticeQuestions(practiceProgress.questions);
@@ -50,15 +51,18 @@ export default function PracticePage() {
          setIsCorrect(null);
         console.log("Practice session loaded from progress.", practiceProgress);
      } else {
-         // No valid progress found
-         toast({
-             title: "No Practice Session",
-             description: "No active practice session found. Redirecting to configuration.",
-             variant: "destructive",
-         });
-         router.replace('/practice/config'); // Use replace to avoid adding to history
+         // No valid progress found (or context still loading)
+         // Only redirect if not loading and no progress found
+         if (!isContextLoading) {
+             toast({
+                 title: "No Practice Session",
+                 description: "No active practice session found. Redirecting to configuration.",
+                 variant: "destructive",
+             });
+             router.replace('/practice/config'); // Use replace to avoid adding to history
+         }
      }
-  }, [practiceProgress, router, toast]); // Depend only on practiceProgress
+  }, [practiceProgress, isContextLoading, router, toast]); // Depend on practiceProgress and context loading state
 
    // Effect to reset feedback when index changes *after* initialization
     useEffect(() => {
@@ -71,17 +75,24 @@ export default function PracticePage() {
 
   // Effect to update practice progress in context whenever index or selections change
   useEffect(() => {
-    // Only save if initialized and there are questions
+    // Only save if initialized and there are questions and progress object exists
     if (isInitialized && practiceQuestions.length > 0 && practiceProgress) {
-         // console.log("Saving practice progress:", { currentIndex: currentQuestionIndex, selections: currentSelections });
-         // Create a new object to ensure state update trigger
-         setPracticeProgress(prev => prev ? {
-            ...prev, // Keep existing questions and range
-            currentIndex: currentQuestionIndex,
-            selections: currentSelections,
-         } : null);
+         setPracticeProgress(prev => {
+            // Ensure prev is not null before spreading
+            if (!prev) return null;
+            // Only update if index or selections actually changed from the stored progress
+            if (prev.currentIndex === currentQuestionIndex && prev.selections === currentSelections) {
+                return prev; // No change, return previous object reference
+            }
+            // Return new object with updated values
+            return {
+                ...prev,
+                currentIndex: currentQuestionIndex,
+                selections: currentSelections,
+            };
+         });
      }
-  }, [currentQuestionIndex, currentSelections, setPracticeProgress, isInitialized, practiceQuestions.length, practiceProgress]); // Include practiceProgress to ensure we have the base object
+  }, [currentQuestionIndex, currentSelections, setPracticeProgress, isInitialized, practiceQuestions.length, practiceProgress]); // Include practiceProgress
 
 
   // Handle changes to the selected answers for the current question
@@ -89,48 +100,66 @@ export default function PracticePage() {
     if (showAnswer) return; // Don't allow changes if answer is revealed
 
     setCurrentSelections(prev => {
-      const currentSelection = prev[questionNumber] || [];
-       // Find question within the *practiceQuestions* subset
+      const previousQuestionSelection = prev[questionNumber] || [];
       const question = practiceQuestions.find(q => q.question_number === questionNumber);
-      if (!question) return prev;
+      if (!question) return prev; // Return previous state if question not found
 
       const isMultipleChoice = question.correct_answer.length > 1;
       let newSelection: string[];
 
       if (isMultipleChoice) {
         if (checked) {
-          newSelection = [...currentSelection, answerKey];
+          // Add answerKey if checked, avoid duplicates
+          newSelection = Array.from(new Set([...previousQuestionSelection, answerKey])).sort();
         } else {
-          newSelection = currentSelection.filter(ans => ans !== answerKey);
+          // Remove answerKey if unchecked
+          newSelection = previousQuestionSelection.filter(ans => ans !== answerKey).sort();
         }
       } else {
-        // Single choice (radio button logic): always replace the selection
-        newSelection = [answerKey];
+        // Single choice logic: always replace the selection
+        newSelection = [answerKey]; // Already sorted as it has one element
       }
 
+      // Optimization: Check if the actual selection for this question *changed*
+      // This prevents unnecessary state updates if the logic results in the same array content and order
+      if (
+        previousQuestionSelection.length === newSelection.length &&
+        previousQuestionSelection.every((val, index) => val === newSelection[index]) // Assumes both are sorted
+       ) {
+         // console.log(`Skipping update for Q#${questionNumber}, selection unchanged.`);
+         return prev; // Return the previous state object reference if no change occurred
+      }
+
+      // Create a *new* state object only if there was a change
       const newState = {
         ...prev,
-        [questionNumber]: newSelection.sort(), // Store sorted answers
+        [questionNumber]: newSelection,
       };
-       // console.log(`Answer changed for Q#${questionNumber}: ${newState[questionNumber]}`);
-       return newState;
+       console.log(`Answer changed for Q#${questionNumber}: ${newState[questionNumber]}`);
+       return newState; // Return the new state object
     });
   }, [showAnswer, practiceQuestions]); // Depend on practiceQuestions
 
 
   // Check the answer for the current question
   const checkAnswer = useCallback(() => {
-    if (!currentQuestion || !currentQuestionNumber || showAnswer) return; // Don't re-check if already shown
+    if (!currentQuestion || !currentQuestionNumber) return; // Ensure question exists
 
     const userSelection = currentSelections[currentQuestionNumber] || [];
-    // Require a selection before checking
-    if (userSelection.length === 0) {
+
+    // Require a selection before checking, unless already showing answer
+    if (userSelection.length === 0 && !showAnswer) {
         toast({ title: "No Answer Selected", description: "Please select an answer before checking.", variant: "default" });
         return;
     }
 
+     // If already showing answer, maybe reset or do nothing? Currently just re-checks.
+     // Let's prevent re-checking if already shown.
+     if (showAnswer) return;
+
+
     const correctAnswers = currentQuestion.correct_answer;
-    const sortedSelected = [...userSelection].sort();
+    const sortedSelected = [...userSelection].sort(); // Ensure it's sorted for comparison
     const sortedCorrect = [...correctAnswers].sort();
 
     const correct = sortedSelected.length === sortedCorrect.length &&
@@ -139,7 +168,7 @@ export default function PracticePage() {
     // console.log(`Checking Q#${currentQuestionNumber}: Selected=${sortedSelected}, Correct=${sortedCorrect}, Result=${correct}`);
     setIsCorrect(correct);
     setShowAnswer(true); // Reveal feedback
-    // Progress is saved via the useEffect watching currentSelections/currentQuestionIndex
+    // Progress saving is handled by the useEffect watching currentSelections/currentQuestionIndex
   }, [currentQuestion, currentQuestionNumber, currentSelections, showAnswer, toast]);
 
 
@@ -150,13 +179,6 @@ export default function PracticePage() {
       // Feedback state reset is handled by the index change effect
     }
   }, [currentQuestionIndex, practiceQuestions.length]);
-
-  const goToPreviousQuestion = useCallback(() => {
-    if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev + 1); // <<<<<<<<< BUG FIX: Should be prev - 1
-       // Feedback state reset is handled by the index change effect
-    }
-  }, [currentQuestionIndex]); // <<<<<<<<< BUG FIX: Was currentQuestionIndex > 0
 
   // Corrected goToPreviousQuestion
   const correctedGoToPreviousQuestion = useCallback(() => {
@@ -192,9 +214,16 @@ export default function PracticePage() {
 
 
   // --- Render Logic ---
-  if (!isInitialized || !currentQuestion) {
-     // Show loading state or redirect message until initialized
+  // Use isContextLoading to show loading state until context is ready
+  if (isContextLoading || (!isInitialized && !practiceProgress)) {
      return <div className="container mx-auto p-4 text-center">Loading practice session...</div>;
+  }
+
+  // If initialized and currentQuestion is somehow still undefined (shouldn't happen with checks)
+  if (!currentQuestion) {
+      toast({ title: "Error", description: "Could not load current question. Redirecting.", variant: "destructive"});
+      router.replace('/practice/config');
+      return <div className="container mx-auto p-4 text-center">Error loading question...</div>;
   }
 
 
@@ -268,7 +297,7 @@ export default function PracticePage() {
           key={currentQuestionNumber} // Ensure re-render on question change
           question={currentQuestion}
           selectedAnswers={currentSelectionForCard}
-          onAnswerChange={(key, checked) => currentQuestionNumber && handleAnswerChange(currentQuestionNumber, key, checked)}
+          onAnswerChange={handleAnswerChange} // Use the optimized handler
           questionIndex={currentQuestionIndex}
           totalQuestions={practiceQuestions.length} // Use length of subset
           revealAnswers={showAnswer} // Pass the state to control feedback visibility in card

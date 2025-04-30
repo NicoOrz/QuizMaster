@@ -13,6 +13,8 @@ import type { Question } from '@/types/quiz';
 interface QuestionCardProps {
   question: Question;
   selectedAnswers: string[]; // Currently selected by the user before checking/submitting
+  // This function should come from the parent (PracticePage or ExamTakePage)
+  // And it should be stable (e.g., wrapped in useCallback)
   onAnswerChange: (answerKey: string, checked: boolean) => void;
   questionIndex: number;
   totalQuestions: number;
@@ -25,12 +27,13 @@ interface QuestionCardProps {
 const isValidUrl = (urlString: string | undefined): boolean => {
   if (!urlString) return false;
   try {
-    // Use URL constructor which is standard and robust
-    new URL(urlString);
-    // Additional check for common protocols if needed, though URL constructor handles many cases
-    return urlString.startsWith('http://') || urlString.startsWith('https://') || urlString.startsWith('/');
+    const url = new URL(urlString);
+    // Additional check for common protocols might be needed if relative URLs are not expected
+    return url.protocol === "http:" || url.protocol === "https:";
   } catch (_) {
-    return false; // Invalid URL format
+    // Attempt to parse as a relative path if absolute URL fails
+    // This is a basic check and might need refinement based on expected relative URL formats
+    return urlString.startsWith('/') && !urlString.includes(' ');
   }
 };
 
@@ -38,7 +41,7 @@ const isValidUrl = (urlString: string | undefined): boolean => {
 export function QuestionCard({
   question,
   selectedAnswers,
-  onAnswerChange,
+  onAnswerChange, // Receive the potentially optimized handler from parent
   questionIndex,
   totalQuestions,
   revealAnswers = false, // Default to false
@@ -89,7 +92,8 @@ export function QuestionCard({
         try {
             // Use absolute URL for proxy to avoid issues with relative paths
             const proxied = `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
-            if (isValidUrl(proxied)) { // Check if proxy URL is valid before setting
+            // Simple check if the proxy URL looks valid (starts with /)
+            if (proxied.startsWith('/')) {
                  finalImageUrl = proxied;
                 // console.log(`Using proxy for image: ${originalUrl} -> ${finalImageUrl}`);
             } else {
@@ -110,7 +114,8 @@ export function QuestionCard({
 
     }
   } else {
-     if (question.image_url && question.image_url.trim() !== '') { // Log only if a non-empty, invalid URL was actually provided
+     // Log only if a non-empty, invalid URL was actually provided
+     if (question.image_url && question.image_url.trim() !== '') {
        console.warn(`Invalid image URL provided for Q#${question.question_number}: ${question.image_url}`);
      }
      // Keep finalImageUrl null if original is invalid or missing/empty
@@ -129,7 +134,7 @@ export function QuestionCard({
                  Question {questionIndex + 1} of {totalQuestions}
                </CardTitle>
                {/* Conditionally render the image container only if finalImageUrl is valid */}
-               {finalImageUrl && isValidUrl(finalImageUrl) && (
+               {finalImageUrl && ( // No need for extra isValidUrl check here, it's already done above
                  <div className="mb-4 relative aspect-video w-full"> {/* Use aspect-video for consistent ratio */}
                    <Image
                      src={finalImageUrl}
@@ -137,7 +142,9 @@ export function QuestionCard({
                      fill
                      style={{ objectFit: 'contain' }}
                      className="rounded-md"
-                     unoptimized={needsProxy(question.image_url)}
+                     // Decide on unoptimization. Often needed for proxied or external non-CDN images.
+                     // Consider making this conditional based on the source or if proxying occurred.
+                     unoptimized={true} // Let's try always unoptimized for simplicity with the proxy
                      onError={(e) => {
                        console.error(`Error loading image for Q#${question.question_number}: ${finalImageUrl}`, e);
                        // Optionally set to a broken image placeholder or hide the element
@@ -164,6 +171,7 @@ export function QuestionCard({
                        <Checkbox
                          id={`${question.question_number}-${key}`}
                          checked={selectedAnswers.includes(key)}
+                         // Use the provided onAnswerChange handler directly
                          onCheckedChange={(checked) => {
                            onAnswerChange(key, !!checked);
                          }}
@@ -185,8 +193,11 @@ export function QuestionCard({
                ) : (
                  <RadioGroup
                     value={selectedAnswers[0] || ''}
+                    // Use the provided onAnswerChange handler directly
                     onValueChange={(value) => {
                         if (value) {
+                           // For radio groups, checking one implies unchecking others (handled by RadioGroup),
+                           // but we just need to signal the change for the selected one.
                            onAnswerChange(value, true);
                         }
                     }}
