@@ -20,6 +20,18 @@ interface QuestionCardProps {
   isDisabled?: boolean; // To disable input after checking/submitting
 }
 
+// Helper function to check if a string is a valid URL
+const isValidUrl = (urlString: string | undefined): boolean => {
+  if (!urlString) return false;
+  try {
+    new URL(urlString);
+    return true;
+  } catch (_) {
+    return false;
+  }
+};
+
+
 export function QuestionCard({
   question,
   selectedAnswers,
@@ -30,7 +42,11 @@ export function QuestionCard({
   userAnswer, // This will hold the checked answer in practice/review
   isDisabled = false, // Default to not disabled
 }: QuestionCardProps) {
-  // console.log(`Rendering QuestionCard for Q#${question?.question_number}, Index: ${questionIndex}, Reveal: ${revealAnswers}, Disabled: ${isDisabled}, Selected:`, selectedAnswers);
+
+   if (!question) {
+      console.error("QuestionCard received null question prop.");
+      return <Card className="w-full max-w-2xl mx-auto shadow-md rounded-lg mb-6 p-4 text-center text-destructive">Error: Question data missing.</Card>;
+   }
 
   const isMultipleChoice = question.correct_answer.length > 1;
 
@@ -38,7 +54,6 @@ export function QuestionCard({
     if (!revealAnswers) return 'border-border'; // Default style if not revealing
 
     const isCorrect = question.correct_answer.includes(optionKey);
-    // Use `userAnswer` (the confirmed/checked answer) for highlighting, which should be the same as `selectedAnswers` in practice mode when revealAnswers is true
     const isSelected = userAnswer?.includes(optionKey);
 
      let style = 'border-border '; // Start with default border
@@ -46,42 +61,48 @@ export function QuestionCard({
      else if (isSelected && !isCorrect) style += 'text-red-600 line-through border-red-300 bg-red-50/50'; // Incorrectly selected
      else if (!isSelected && isCorrect) style += 'text-green-600 border-green-300'; // Correct but not selected
 
-    // console.log(`Option ${optionKey}: isSelected=${isSelected}, isCorrect=${isCorrect}, style='${style.trim()}'`);
     return style.trim();
   };
 
-  if (!question) {
-      console.error("QuestionCard received null question prop.");
-      return <Card className="w-full max-w-2xl mx-auto shadow-md rounded-lg mb-6 p-4 text-center text-destructive">Error: Question data missing.</Card>;
-  }
 
-  // --- Image Proxy Logic ---
+  // --- Image Proxy and Validation Logic ---
+  const placeholderUrl = `https://picsum.photos/seed/${question.question_number}/600/400`;
+  let finalImageUrl: string = placeholderUrl; // Default to placeholder
+
   // Decide if the image needs proxying. Proxy images from modb.pro
-  const needsProxy = (url: string | undefined): boolean => {
-    return !!url && url.includes('modb.pro');
-     // return false; // Temporarily disable proxy for debugging if needed
+  const needsProxy = (url: string): boolean => {
+    try {
+        const hostname = new URL(url).hostname;
+        // Add other domains that require proxying if necessary
+        return hostname.includes('modb.pro');
+    } catch {
+        return false; // Invalid URL cannot need proxying
+    }
   };
 
-  let finalImageUrl = question.image_url; // Start with the original URL
-
-  if (question.image_url && needsProxy(question.image_url)) {
-    // If proxy is needed, construct the proxy URL
-    try {
-      const encodedUrl = encodeURIComponent(question.image_url);
-      finalImageUrl = `/api/image-proxy?url=${encodedUrl}`;
-      console.log(`Using proxy for image: ${question.image_url} -> ${finalImageUrl}`);
-    } catch (error) {
-      console.error("Error encoding image URL for proxy:", question.image_url, error);
-      // Fallback or handle error - perhaps use placeholder or skip image
-      finalImageUrl = `https://picsum.photos/seed/${question.question_number}/600/400`; // Fallback placeholder
+  if (isValidUrl(question.image_url)) {
+    const originalUrl = question.image_url!; // Assert non-null because isValidUrl checked
+    if (needsProxy(originalUrl)) {
+        try {
+            const encodedUrl = encodeURIComponent(originalUrl);
+            finalImageUrl = `/api/image-proxy?url=${encodedUrl}`;
+            // console.log(`Using proxy for image: ${originalUrl} -> ${finalImageUrl}`);
+        } catch (error) {
+            console.error("Error encoding image URL for proxy:", originalUrl, error);
+            finalImageUrl = placeholderUrl; // Fallback on encoding error
+        }
+    } else {
+        finalImageUrl = originalUrl; // Use original valid URL if no proxy needed
     }
-  } else if (!question.image_url) {
-     // Use placeholder if no image_url is provided
-    finalImageUrl = `https://picsum.photos/seed/${question.question_number}/600/400`;
-    console.log(`Using placeholder image for Q#${question.question_number}`);
+  } else {
+     if (question.image_url) { // Log only if an invalid URL was actually provided
+       console.warn(`Invalid image URL provided for Q#${question.question_number}, using placeholder: ${question.image_url}`);
+     } else {
+        // console.log(`No image URL for Q#${question.question_number}, using placeholder.`);
+     }
+     finalImageUrl = placeholderUrl; // Ensure placeholder if original is invalid or missing
   }
-  // If URL is present but doesn't need proxying, finalImageUrl remains the original URL.
-  // --- End Image Proxy Logic ---
+  // --- End Image Proxy and Validation Logic ---
 
 
   return (
@@ -90,25 +111,28 @@ export function QuestionCard({
         <CardTitle className="text-lg font-semibold">
           Question {questionIndex + 1} of {totalQuestions}
         </CardTitle>
-         {/* Use finalImageUrl which might be the original URL or the proxy URL */}
+         {/* Use finalImageUrl which is guaranteed to be a valid URL string (either original, proxied, or placeholder) */}
          {finalImageUrl && (
           <div className="mt-4 mb-4 relative h-60 w-full">
             <Image
-              // Use the potentially proxied URL
               src={finalImageUrl}
               alt={`Question ${question.question_number} Image`}
               fill
               style={{ objectFit: 'contain' }}
               className="rounded-md"
-              // When using the proxy, next/image optimization might be less effective
-              // or might require configuring the proxy domain in next.config.js if it behaves like an external loader.
-              // If using the proxy, you might consider `unoptimized={true}` if optimization causes issues,
-              // but ideally, the proxy itself should handle caching appropriately.
-              unoptimized={needsProxy(question.image_url)} // Unoptimize if using the proxy
+              // Unoptimize if using the proxy OR if it's the placeholder (picsum optimization might not be needed/wanted)
+              unoptimized={needsProxy(question.image_url || '') || finalImageUrl === placeholderUrl}
               onError={(e) => {
                 console.error(`Error loading image for Q#${question.question_number}: ${finalImageUrl}`, e);
-                // Optionally, you could try to set a fallback image source here
-                // e.currentTarget.src = `https://picsum.photos/seed/${question.question_number}/600/400/fallback`;
+                // Attempt to set to the known placeholder URL on error
+                // Note: This might trigger another onError if the placeholder itself fails, creating a loop.
+                // Consider adding a state to prevent infinite loops if necessary.
+                const target = e.target as HTMLImageElement;
+                if (target.src !== placeholderUrl) {
+                     target.src = placeholderUrl;
+                     target.srcset = ""; // Clear srcset if it exists
+                     console.warn(`Falling back to placeholder for Q#${question.question_number}`);
+                }
               }}
               priority={questionIndex === 0} // Prioritize loading the first image
             />
@@ -126,7 +150,6 @@ export function QuestionCard({
                   id={`${question.question_number}-${key}`}
                   checked={selectedAnswers.includes(key)}
                   onCheckedChange={(checked) => {
-                    // console.log(`Checkbox ${key} changed to: ${checked}`);
                     onAnswerChange(key, !!checked);
                   }}
                   disabled={isDisabled} // Disable based on prop
@@ -148,9 +171,8 @@ export function QuestionCard({
           <RadioGroup
              value={selectedAnswers[0] || ''}
              onValueChange={(value) => {
-                 if (value) { // Ensure value is not empty string if nothing selected
-                    // console.log(`RadioGroup changed to: ${value}`);
-                    onAnswerChange(value, true); // Radio always means 'checked' is true for the new value
+                 if (value) {
+                    onAnswerChange(value, true);
                  }
              }}
              disabled={isDisabled} // Disable based on prop
