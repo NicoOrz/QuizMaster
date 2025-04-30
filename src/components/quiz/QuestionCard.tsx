@@ -55,27 +55,32 @@ export function QuestionCard({
       return <Card className="w-full max-w-2xl mx-auto shadow-md rounded-lg mb-6 p-4 text-center text-destructive">Error: Question data missing.</Card>;
   }
 
-  // --- Image Proxy Logic (Example - Adapt as needed) ---
-  // Decide if the image needs proxying based on its URL or other criteria
+  // --- Image Proxy Logic ---
+  // Decide if the image needs proxying. Proxy images from modb.pro
   const needsProxy = (url: string | undefined): boolean => {
-    // Example condition: Proxy images from a specific domain that needs auth headers
-    // return !!url && url.startsWith('https://private-images.example.com/');
-    // For now, we disable proxying by default. Change this logic based on requirements.
-    return false;
+    return !!url && url.includes('modb.pro');
+     // return false; // Temporarily disable proxy for debugging if needed
   };
 
-  let finalImageUrl = question.image_url?.includes('modb.pro') || question.image_url?.includes('picsum.photos')
-    ? question.image_url
-    : `https://picsum.photos/seed/${question.question_number}/600/400`; // Default placeholder
+  let finalImageUrl = question.image_url; // Start with the original URL
 
   if (question.image_url && needsProxy(question.image_url)) {
     // If proxy is needed, construct the proxy URL
-    finalImageUrl = `/api/image-proxy?url=${encodeURIComponent(question.image_url)}`;
-    console.log(`Using proxy for image: ${question.image_url} -> ${finalImageUrl}`);
-  } else if (question.image_url) {
-     // Use the original URL if no proxy is needed (and it's not the placeholder case handled above)
-     finalImageUrl = question.image_url;
+    try {
+      const encodedUrl = encodeURIComponent(question.image_url);
+      finalImageUrl = `/api/image-proxy?url=${encodedUrl}`;
+      console.log(`Using proxy for image: ${question.image_url} -> ${finalImageUrl}`);
+    } catch (error) {
+      console.error("Error encoding image URL for proxy:", question.image_url, error);
+      // Fallback or handle error - perhaps use placeholder or skip image
+      finalImageUrl = `https://picsum.photos/seed/${question.question_number}/600/400`; // Fallback placeholder
+    }
+  } else if (!question.image_url) {
+     // Use placeholder if no image_url is provided
+    finalImageUrl = `https://picsum.photos/seed/${question.question_number}/600/400`;
+    console.log(`Using placeholder image for Q#${question.question_number}`);
   }
+  // If URL is present but doesn't need proxying, finalImageUrl remains the original URL.
   // --- End Image Proxy Logic ---
 
 
@@ -99,8 +104,13 @@ export function QuestionCard({
               // or might require configuring the proxy domain in next.config.js if it behaves like an external loader.
               // If using the proxy, you might consider `unoptimized={true}` if optimization causes issues,
               // but ideally, the proxy itself should handle caching appropriately.
-              unoptimized={needsProxy(question.image_url) || !finalImageUrl.includes('picsum.photos')} // Example: Unoptimize proxied or non-picsum URLs
-              onError={(e) => console.error(`Error loading image for Q#${question.question_number}: ${finalImageUrl}`, e)}
+              unoptimized={needsProxy(question.image_url)} // Unoptimize if using the proxy
+              onError={(e) => {
+                console.error(`Error loading image for Q#${question.question_number}: ${finalImageUrl}`, e);
+                // Optionally, you could try to set a fallback image source here
+                // e.currentTarget.src = `https://picsum.photos/seed/${question.question_number}/600/400/fallback`;
+              }}
+              priority={questionIndex === 0} // Prioritize loading the first image
             />
           </div>
         )}
@@ -111,7 +121,7 @@ export function QuestionCard({
         {isMultipleChoice ? (
           <div className="space-y-3">
             {Object.entries(question.options).map(([key, value]) => (
-              <div key={key} className={`flex items-center space-x-3 p-3 rounded-md border transition-colors ${getOptionStyle(key)}`}>
+              <div key={key} className={`flex items-start space-x-3 p-3 rounded-md border transition-colors ${getOptionStyle(key)}`}>
                 <Checkbox
                   id={`${question.question_number}-${key}`}
                   checked={selectedAnswers.includes(key)}
@@ -121,6 +131,7 @@ export function QuestionCard({
                   }}
                   disabled={isDisabled} // Disable based on prop
                   aria-label={`Option ${key}`}
+                  className="mt-1" // Align checkbox slightly lower if text wraps
                 />
                 <Label
                   htmlFor={`${question.question_number}-${key}`}
@@ -146,8 +157,8 @@ export function QuestionCard({
              className="space-y-3"
           >
             {Object.entries(question.options).map(([key, value]) => (
-              <div key={key} className={`flex items-center space-x-3 p-3 rounded-md border transition-colors ${getOptionStyle(key)}`}>
-                <RadioGroupItem value={key} id={`${question.question_number}-${key}`} aria-label={`Option ${key}`} />
+              <div key={key} className={`flex items-start space-x-3 p-3 rounded-md border transition-colors ${getOptionStyle(key)}`}>
+                <RadioGroupItem value={key} id={`${question.question_number}-${key}`} aria-label={`Option ${key}`} className="mt-1" />
                 <Label
                   htmlFor={`${question.question_number}-${key}`}
                   className={`flex-1 ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
