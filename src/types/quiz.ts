@@ -37,7 +37,7 @@ export interface ExamRecord {
 // --- Progress Interfaces ---
 
 export interface PracticeProgress {
-  questions: Question[]; // The specific subset of questions being practiced
+  questions: Question[]; // The specific subset of questions being practiced (shuffled)
   currentIndex: number;
   selections: Record<number, string[]>; // question_number -> selected options
   // Optional: Store the original range for context, if needed later
@@ -50,4 +50,22 @@ export interface ExamProgress {
   answers: Record<number, UserAnswer>; // question_number -> UserAnswer
   startTime: number; // Timestamp when the exam was started/resumed
   configNumQuestions: number; // Store the number of questions requested for this exam
+}
+
+
+// --- Result Interfaces ---
+
+// Simplified structure for displaying incorrect answers in practice results
+export interface PracticeIncorrectQuestion extends IncorrectQuestionDetail {
+   // Inherits all fields from IncorrectQuestionDetail
+}
+
+export interface PracticeResult {
+    score: number;
+    totalQuestions: number;
+    correctCount: number;
+    incorrectQuestions: PracticeIncorrectQuestion[];
+    timestamp: number; // When the practice session was finished
+    duration?: number; // Optional: time taken in seconds
+    range?: { start: number; end: number }; // The range practiced
 }

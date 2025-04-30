@@ -1,24 +1,23 @@
 
-
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuiz } from '@/context/QuizContext';
 import { QuestionCard } from '@/components/quiz/QuestionCard';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, ArrowRight, Home, Check, X, List, RotateCcw, Settings } from 'lucide-react'; // Added Settings
+import { ArrowLeft, ArrowRight, Home, Check, X, List, RotateCcw, Settings, CheckCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import type { Question, PracticeProgress } from '@/types/quiz';
+import type { Question, PracticeProgress, PracticeResult, PracticeIncorrectQuestion } from '@/types/quiz';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { QuizOverview } from '@/components/quiz/QuizOverview';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { useToast } from "@/hooks/use-toast"; // Import useToast
-import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton for loading
+import { useToast } from "@/hooks/use-toast";
+import { Skeleton } from '@/components/ui/skeleton';
 
 export default function PracticePage() {
-  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isInitialized: isContextInitialized, isLoading: isContextLoading } = useQuiz();
+  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isInitialized: isContextInitialized, isLoading: isContextLoading, setLastPracticeResult } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -26,6 +25,8 @@ export default function PracticePage() {
   const [practiceQuestions, setPracticeQuestions] = useState<Question[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [currentSelections, setCurrentSelections] = useState<Record<number, string[]>>({});
+   // Store start time when the component initializes with valid progress
+   const [practiceStartTime, setPracticeStartTime] = useState<number | null>(null);
 
   // Local UI state
   const [showAnswer, setShowAnswer] = useState(false);
@@ -43,11 +44,8 @@ export default function PracticePage() {
   // --- Initialization and Validation Effect ---
   useEffect(() => {
      if (isContextLoading || !isContextInitialized || isComponentInitialized) {
-         // console.log("PracticePage: Waiting for context/component init...");
          return;
      }
-
-     // console.log("PracticePage: Context initialized. Checking practiceProgress:", practiceProgress);
 
      if (practiceProgress && practiceProgress.questions.length > 0) {
         const { questions, currentIndex, selections } = practiceProgress;
@@ -59,10 +57,10 @@ export default function PracticePage() {
              setPracticeQuestions(questions);
              setCurrentQuestionIndex(currentIndex);
              setCurrentSelections(selections);
+             setPracticeStartTime(Date.now()); // Set start time on successful load
              setIsComponentInitialized(true);
              setShowAnswer(false);
              setIsCorrect(null);
-             // console.log("Practice session loaded successfully from progress.");
         } else {
              console.warn("PracticePage: Invalid practice progress structure. Clearing and redirecting.", practiceProgress);
              toast({ title: "Invalid Progress", description: "Clearing invalid session data.", variant: "destructive" });
@@ -70,9 +68,6 @@ export default function PracticePage() {
              setShouldRedirect(true);
         }
      } else {
-         // console.log("PracticePage: No active practice session. Redirecting.");
-         // Don't toast here, config page handles the "no progress" case gracefully
-         // toast({ title: "No Practice Session", description: "Redirecting to configuration.", variant: "destructive" });
          setShouldRedirect(true);
      }
   }, [practiceProgress, isContextLoading, isContextInitialized, isComponentInitialized, toast, clearPracticeProgress]);
@@ -81,16 +76,14 @@ export default function PracticePage() {
    useEffect(() => {
     if (shouldRedirect) {
         console.log("PracticePage: Triggering redirect to /practice/config");
-        // Use timeout to ensure state updates settle before redirecting
         const timer = setTimeout(() => router.replace('/practice/config'), 0);
-        return () => clearTimeout(timer); // Cleanup timer on unmount or if redirect changes
+        return () => clearTimeout(timer);
     }
    }, [shouldRedirect, router]);
 
    // Effect to reset feedback when index changes *after* initialization
     useEffect(() => {
         if (isComponentInitialized) {
-            // console.log(`PracticePage: Index changed to ${currentQuestionIndex}. Resetting feedback.`);
             setShowAnswer(false);
             setIsCorrect(null);
         }
@@ -101,21 +94,18 @@ export default function PracticePage() {
   useEffect(() => {
     if (isComponentInitialized && isContextInitialized && practiceQuestions.length > 0) {
         setPracticeProgress(prev => {
-            if (!prev) return null; // Should not happen if isComponentInitialized is true
+            if (!prev) return null;
 
-            // Update only the relevant parts: index and selections
             const newState: PracticeProgress = {
                 ...prev,
                 currentIndex: currentQuestionIndex,
                 selections: currentSelections,
-                questions: practiceQuestions, // Update questions in case they were modified (e.g., shuffle on load)
+                questions: practiceQuestions,
             };
 
-            // Basic check for actual changes to avoid unnecessary writes
             if (prev.currentIndex !== newState.currentIndex ||
                 JSON.stringify(prev.selections) !== JSON.stringify(newState.selections) ||
                 JSON.stringify(prev.questions) !== JSON.stringify(newState.questions)) {
-                 // console.log("Practice progress updated in context/localStorage.");
                  return newState;
              }
             return prev; // No change
@@ -132,42 +122,38 @@ export default function PracticePage() {
 
 
   const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
-    // console.log(`handleAnswerChange: Q#${questionNumber}, Key: ${answerKey}, Checked: ${checked}, showAnswer: ${showAnswer}`);
     if (showAnswer) {
-      // console.log("handleAnswerChange: Skipping, answer already shown.");
-      return;
+        return; // Don't allow changes after revealing the answer
     }
 
     setCurrentSelections(prevSelections => {
-      const previousQuestionSelection = prevSelections[questionNumber] || [];
-      const question = practiceQuestions.find(q => q.question_number === questionNumber);
-
-      if (!question) {
-          console.warn(`handleAnswerChange: Question #${questionNumber} not found.`);
-          return prevSelections;
-      }
-
-      const isMultipleChoice = question.correct_answer.length > 1;
-      let newSelection: string[];
-
-      if (isMultipleChoice) {
-        if (checked) {
-          newSelection = Array.from(new Set([...previousQuestionSelection, answerKey])).sort();
-        } else {
-          newSelection = previousQuestionSelection.filter(ans => ans !== answerKey).sort();
+        const currentQuestion = practiceQuestions.find(q => q.question_number === questionNumber);
+        if (!currentQuestion) {
+            console.warn(`handleAnswerChange: Question #${questionNumber} not found.`);
+            return prevSelections;
         }
-      } else {
-        newSelection = checked ? [answerKey] : []; // Allow unchecking radio button conceptually? Or just set directly.
-        // RadioGroup usually handles the single selection logic, onValueChange might be better here.
-        // For simplicity with the shared handler, we'll set directly:
-        newSelection = [answerKey];
-      }
 
-       // console.log(`handleAnswerChange -> Setting selections for Q#${questionNumber} to:`, newSelection);
-       return {
-         ...prevSelections,
-         [questionNumber]: newSelection,
-       };
+        const currentSelection = prevSelections[questionNumber] || [];
+        const isMultipleChoice = currentQuestion.correct_answer.length > 1;
+        let newSelection: string[];
+
+        if (isMultipleChoice) {
+            if (checked) {
+                newSelection = Array.from(new Set([...currentSelection, answerKey])).sort();
+            } else {
+                newSelection = currentSelection.filter(ans => ans !== answerKey).sort();
+            }
+        } else {
+            // For RadioGroup (single choice), directly set the new value
+            newSelection = [answerKey];
+        }
+
+        // console.log(`Answer changed for Q#${questionNumber}: ${newSelection.join(', ')}`);
+
+        return {
+            ...prevSelections,
+            [questionNumber]: newSelection,
+        };
     });
   }, [showAnswer, practiceQuestions]);
 
@@ -196,7 +182,6 @@ export default function PracticePage() {
 
     setIsCorrect(correct);
     setShowAnswer(true);
-    // console.log(`Checked answer for Q#${currentQuestionNumber}. Correct: ${correct}`);
   }, [currentQuestion, currentQuestionNumber, currentSelections, showAnswer, toast]);
 
 
@@ -209,7 +194,7 @@ export default function PracticePage() {
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
-       setCurrentQuestionIndex(prev => prev - 1); // Corrected here
+       setCurrentQuestionIndex(prev => prev - 1);
     }
   }, [currentQuestionIndex]);
 
@@ -236,10 +221,66 @@ export default function PracticePage() {
     setShouldRedirect(true);
   }, [clearPracticeProgress, toast]);
 
+  // --- Finish Practice Logic ---
+   const finishPractice = useCallback(() => {
+        if (!practiceQuestions || practiceQuestions.length === 0 || !practiceProgress) {
+            toast({ title: "Error", description: "No practice session data found to finish.", variant: "destructive" });
+            return;
+        }
+
+        let correctCount = 0;
+        const incorrectQuestionsDetail: PracticeIncorrectQuestion[] = [];
+        const finalSelections = currentSelections; // Use the latest selections state
+
+        practiceQuestions.forEach((question) => {
+            const questionNum = question.question_number;
+            const userSelection = finalSelections[questionNum] || [];
+            const correctAnswers = question.correct_answer;
+            const sortedSelected = [...userSelection].sort();
+            const sortedCorrect = [...correctAnswers].sort();
+
+            const isCorrect = sortedSelected.length === sortedCorrect.length &&
+                              sortedSelected.every((value, index) => value === sortedCorrect[index]);
+
+            if (isCorrect) {
+                correctCount++;
+            } else {
+                incorrectQuestionsDetail.push({
+                    question_number: questionNum,
+                    question_text: question.question_text,
+                    options: question.options,
+                    user_answer: sortedSelected,
+                    correct_answer: sortedCorrect,
+                    explanation: question.explanation,
+                    image_url: question.image_url,
+                });
+            }
+        });
+
+        const score = practiceQuestions.length > 0 ? (correctCount / practiceQuestions.length) * 100 : 0;
+        const practiceEndTime = Date.now();
+        const duration = practiceStartTime ? Math.round((practiceEndTime - practiceStartTime) / 1000) : undefined;
+
+        const result: PracticeResult = {
+            score: parseFloat(score.toFixed(2)),
+            totalQuestions: practiceQuestions.length,
+            correctCount: correctCount,
+            incorrectQuestions: incorrectQuestionsDetail,
+            timestamp: practiceEndTime,
+            duration: duration,
+            range: practiceProgress.range, // Include the range practiced
+        };
+
+        setLastPracticeResult(result); // Store result in context
+        clearPracticeProgress(); // Clear the practice progress
+        toast({ title: "Practice Finished!", description: "Showing your results." });
+        router.push('/practice/results'); // Navigate to results page
+
+   }, [practiceQuestions, currentSelections, practiceProgress, practiceStartTime, setLastPracticeResult, clearPracticeProgress, router, toast]);
+
 
   // --- Render Logic ---
   if (shouldRedirect) {
-      // Render minimal loading/redirecting state while redirect effect runs
       return (
           <div className="container mx-auto p-4 min-h-screen flex items-center justify-center">
               Redirecting...
@@ -249,41 +290,34 @@ export default function PracticePage() {
   if (isContextLoading || !isContextInitialized || !isComponentInitialized) {
      return (
          <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 space-y-6">
-             {/* Skeleton Header */}
              <div className="absolute top-4 left-4 z-20 flex space-x-2">
-                 <Skeleton className="h-9 w-24" /> {/* Home */}
-                 <Skeleton className="h-9 w-28" /> {/* Configure */}
-                 <Skeleton className="h-9 w-9 rounded-md" /> {/* Reset */}
+                 <Skeleton className="h-9 w-24" />
+                 <Skeleton className="h-9 w-28" />
+                 <Skeleton className="h-9 w-9 rounded-md" />
              </div>
-             <Skeleton className="h-9 w-36 absolute top-4 right-4 z-20" /> {/* Overview */}
-
-             {/* Skeleton Title */}
+             <Skeleton className="h-9 w-36 absolute top-4 right-4 z-20" />
              <Skeleton className="h-8 w-48 mt-12" />
-             <Skeleton className="h-4 w-64 mb-6" /> {/* Range */}
-
-             {/* Skeleton Question Card */}
+             <Skeleton className="h-4 w-64 mb-6" />
              <div className="w-full max-w-4xl space-y-4">
-                 <Skeleton className="h-60 w-full" /> {/* Placeholder for card content */}
+                 <Skeleton className="h-60 w-full" />
              </div>
-
-             {/* Skeleton Navigation */}
              <Skeleton className="w-full max-w-4xl h-16 mt-6" />
          </div>
      );
   }
 
-  // Safety check after initialization logic
   if (!currentQuestion) {
-      // This should ideally not be reached if initialization logic is correct
-      console.error("PracticePage Render: Current question is undefined after initialization. Triggering redirect.");
-      setShouldRedirect(true); // Trigger redirect if state is inconsistent
-      return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
-  }
+        // This case should be handled by the redirect logic if initialization fails properly
+        console.error("PracticePage Render: Current question is undefined after initialization checks. State is inconsistent.");
+        // Avoid rendering broken UI, show a generic error message or rely on redirect
+        return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
+   }
 
   // Get the potentially empty selection for the *current* question number
   const currentSelectionForCard = currentSelections[currentQuestionNumber] || [];
   // Get the original question number for display
   const originalQuestionNumber = currentQuestion.question_number;
+  const isLastQuestion = currentQuestionIndex === practiceQuestions.length - 1;
 
   return (
     <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 relative">
@@ -394,28 +428,40 @@ export default function PracticePage() {
             <ArrowLeft className="mr-2 h-4 w-4" /> Previous
           </Button>
 
-          {!showAnswer ? (
-            <Button
-              onClick={checkAnswer}
-              disabled={currentSelectionForCard.length === 0} // Disable if no answer selected
-            >
-              Check Answer
-            </Button>
-          ) : (
-             // Show "Next" button even if it's the last question, to provide clear progression end
-             <Button
-               onClick={goToNextQuestion}
-               disabled={currentQuestionIndex === practiceQuestions.length - 1}
-              >
-              Next <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          )}
+            {/* Central Button Logic */}
+            {!showAnswer ? (
+                <Button
+                    onClick={checkAnswer}
+                    disabled={currentSelectionForCard.length === 0}
+                >
+                    Check Answer
+                </Button>
+            ) : (
+                 isLastQuestion ? (
+                     <Button onClick={finishPractice} variant="destructive">
+                        <CheckCircle className="mr-2 h-4 w-4" /> Finish Practice
+                     </Button>
+                 ) : (
+                    <Button onClick={goToNextQuestion}>
+                        Next <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                 )
+            )}
+
+             {/* Empty div to balance the flex layout when middle button is present */}
+             {/* This ensures Prev/Next stay at the edges */}
+             {showAnswer && !isLastQuestion && <div></div>}
+             {!showAnswer && <div></div>}
+
+            {/* Conditionally render the "Next" button on the right only if needed and not last */}
+            {/* This button is now part of the middle logic */}
+
         </CardContent>
       </Card>
 
-        {/* Add a message on the last question after checking */}
+       {/* Add a message on the last question after checking */}
        {showAnswer && currentQuestionIndex === practiceQuestions.length - 1 && (
-          <p className="text-center text-muted-foreground mt-4">You've reached the end of this practice session.</p>
+          <p className="text-center text-muted-foreground mt-4">You've reached the end. Click "Finish Practice" to see your results.</p>
        )}
     </div>
   );

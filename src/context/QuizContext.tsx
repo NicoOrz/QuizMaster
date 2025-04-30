@@ -1,7 +1,7 @@
 
 "use client";
 
-import type { Question, ExamRecord, UserAnswer, PracticeProgress, ExamProgress } from '@/types/quiz';
+import type { Question, ExamRecord, UserAnswer, PracticeProgress, ExamProgress, PracticeResult } from '@/types/quiz';
 import React, { createContext, useContext, useState, ReactNode, Dispatch, SetStateAction, useEffect, useCallback } from 'react';
 
 
@@ -26,6 +26,10 @@ interface QuizContextProps {
 
   // Flag for initialization
   isInitialized: boolean;
+
+  // Temporary state for practice results
+  lastPracticeResult: PracticeResult | null;
+  setLastPracticeResult: Dispatch<SetStateAction<PracticeResult | null>>;
 }
 
 const QuizContext = createContext<QuizContextProps | undefined>(undefined);
@@ -96,9 +100,10 @@ const safelySetLocalStorage = (key: string, value: any) => {
              // Ensure progress objects have the correct structure before saving
              if (key === PRACTICE_PROGRESS_KEY) {
                 const progress = value as PracticeProgress;
+                // Allow empty questions array initially, but other fields must be correct type
                 if (!progress || !Array.isArray(progress.questions) || typeof progress.currentIndex !== 'number' || typeof progress.selections !== 'object') {
                     console.warn(`Attempted to save invalid practice progress structure for key "${key}". Skipping save. Value:`, progress);
-                    return;
+                    return; // Skip saving invalid structure
                 }
              }
               if (key === EXAM_PROGRESS_KEY) {
@@ -125,17 +130,21 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   const [practiceProgress, setPracticeProgress] = useState<PracticeProgress | null>(null);
   const [examProgress, setExamProgress] = useState<ExamProgress | null>(null);
   const [isInitialized, setIsInitialized] = useState(false); // Track client-side initialization
+  const [lastPracticeResult, setLastPracticeResult] = useState<PracticeResult | null>(null); // State for practice results
 
   // Effect to load data from localStorage *only on the client*
   useEffect(() => {
-    setQuestions(safelyGetLocalStorage<Question[]>(ALL_QUESTIONS_KEY, []));
-    setExamHistory(safelyGetLocalStorage<ExamRecord[]>(EXAM_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp));
-    setPracticeProgress(safelyGetLocalStorage<PracticeProgress | null>(PRACTICE_PROGRESS_KEY, null));
-    setExamProgress(safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null));
-    setIsLoading(false); // Finish loading after retrieving from storage
-    setIsInitialized(true); // Mark initialization complete
-    console.log("QuizContext initialized from localStorage.");
-  }, []); // Empty dependency array ensures this runs only once on mount
+    // Check if already initialized to prevent re-running
+    if (!isInitialized) {
+        setQuestions(safelyGetLocalStorage<Question[]>(ALL_QUESTIONS_KEY, []));
+        setExamHistory(safelyGetLocalStorage<ExamRecord[]>(EXAM_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp));
+        setPracticeProgress(safelyGetLocalStorage<PracticeProgress | null>(PRACTICE_PROGRESS_KEY, null));
+        setExamProgress(safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null));
+        setIsLoading(false); // Finish loading after retrieving from storage
+        setIsInitialized(true); // Mark initialization complete
+        console.log("QuizContext initialized from localStorage.");
+    }
+  }, [isInitialized]); // Depend on isInitialized
 
    // --- Effect to Persist All Questions ---
    useEffect(() => {
@@ -211,6 +220,8 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
         clearPracticeProgress,
         clearExamProgress,
         isInitialized, // Provide initialization status
+        lastPracticeResult,
+        setLastPracticeResult,
       }}
     >
       {children}
