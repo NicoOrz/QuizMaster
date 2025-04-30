@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useRef, ChangeEvent } from 'react';
@@ -9,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Upload } from 'lucide-react';
 
 export function FileUpload() {
-  const { setQuestions, setIsLoading } = useQuiz();
+  const { setQuestions, setIsLoading, clearPracticeProgress, clearExamProgress } = useQuiz(); // Get clear functions
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -26,9 +27,12 @@ export function FileUpload() {
             // Basic validation (can be more thorough)
             if (Array.isArray(parsedQuestions) && parsedQuestions.length > 0 && parsedQuestions[0].question_text) {
               setQuestions(parsedQuestions);
+              // Clear progress on successful import
+              clearPracticeProgress();
+              clearExamProgress();
               toast({
                 title: "Success",
-                description: `Successfully imported ${parsedQuestions.length} questions.`,
+                description: `Successfully imported ${parsedQuestions.length} questions. Any previous progress has been cleared.`,
               });
             } else {
               throw new Error('Invalid JSON format for questions.');
@@ -42,6 +46,9 @@ export function FileUpload() {
             description: `Failed to parse JSON file. Please ensure it's valid. ${error instanceof Error ? error.message : ''}`,
           });
           setQuestions([]); // Clear questions on error
+          // Optionally clear progress on error too, or leave it
+          // clearPracticeProgress();
+          // clearExamProgress();
         } finally {
            setIsLoading(false);
            // Reset file input value to allow re-uploading the same file

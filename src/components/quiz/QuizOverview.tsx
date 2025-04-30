@@ -9,7 +9,9 @@ import { Check, Circle } from 'lucide-react';
 
 interface QuizOverviewProps {
   questions: Question[];
-  userAnswers: Record<number, UserAnswer>; // Answers keyed by question_number
+  // In practice mode, this holds selections made: Record<number, string[]>
+  // In exam mode, this holds full UserAnswer objects: Record<number, UserAnswer>
+  userAnswers: Record<number, string[] | UserAnswer | undefined>;
   currentQuestionIndex: number;
   navigateToQuestion: (index: number) => void;
   mode: 'practice' | 'exam';
@@ -27,7 +29,13 @@ export function QuizOverview({
     if (index === currentQuestionIndex) {
       return 'current';
     }
-    if (userAnswers[question.question_number]?.selected_answers?.length > 0) {
+    // Check if there's an entry for this question_number and if it has selected answers
+    const answerData = userAnswers[question.question_number];
+    const hasAnswer = Array.isArray(answerData)
+        ? answerData.length > 0 // Practice mode: check if selection array is not empty
+        : !!answerData?.selected_answers?.length; // Exam mode: check UserAnswer object
+
+    if (hasAnswer) {
        return 'answered';
     }
     return 'unanswered';
@@ -38,7 +46,6 @@ export function QuizOverview({
          case 'current':
             return 'default'; // Highlight current question
          case 'answered':
-             // In practice mode, we might eventually differentiate correct/incorrect if state allows
              return 'secondary'; // Mark answered questions differently
          case 'unanswered':
             return 'outline'; // Default for unanswered
@@ -53,7 +60,6 @@ export function QuizOverview({
         {questions.map((question, index) => {
           const status = getStatus(question, index);
           const variant = getVariant(status);
-          const hasAnswered = !!userAnswers[question.question_number]?.selected_answers?.length;
 
           return (
             <Button
@@ -68,7 +74,6 @@ export function QuizOverview({
                {status === 'answered' && (
                  <Check className="absolute -top-1 -right-1 h-3 w-3 text-green-600 bg-background rounded-full" />
                )}
-                {/* Optionally add an indicator for unanswered */}
                 {/* {status === 'unanswered' && (
                  <Circle className="absolute -top-1 -right-1 h-3 w-3 text-muted-foreground fill-muted-foreground/50" />
                )} */}

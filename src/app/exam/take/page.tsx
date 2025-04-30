@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -10,11 +9,11 @@ import { QuestionCard } from '@/components/quiz/QuestionCard';
 import { Button } from '@/components/ui/button';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, ArrowRight, CheckCircle, Home, List } from 'lucide-react'; // Added List icon
+import { ArrowLeft, ArrowRight, CheckCircle, Home, List, LogOut } from 'lucide-react'; // Added LogOut for Exit
 import { Card, CardContent } from '@/components/ui/card';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"; // Added Sheet components
-import { QuizOverview } from '@/components/quiz/QuizOverview'; // Added QuizOverview
-import { saveExamRecord } from '@/services/firestoreService'; // Import Firestore service
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { QuizOverview } from '@/components/quiz/QuizOverview';
+import { saveExamRecord } from '@/services/firestoreService';
 import { useToast } from "@/hooks/use-toast";
 
 // Helper function to shuffle an array
@@ -27,69 +26,121 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-
 export default function ExamTakePage() {
-  const { questions: allQuestions, addExamRecord } = useQuiz();
+  const { questions: allQuestions, addExamRecord, examProgress, setExamProgress, clearExamProgress } = useQuiz();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
-  const requestedNumQuestions = parseInt(searchParams.get('numQuestions') || '10', 10);
+  const requestedNumQuestionsParam = searchParams.get('numQuestions');
 
-  const examQuestions = useMemo(() => {
-     if (allQuestions.length === 0) return [];
-    const shuffled = shuffleArray(allQuestions);
-    // Ensure requested number doesn't exceed available questions
-    const numToTake = Math.min(requestedNumQuestions, allQuestions.length);
-    // Ensure we don't try to take 0 questions if the bank is empty or requested num is invalid
-    return shuffled.slice(0, Math.max(1, numToTake));
-  }, [allQuestions, requestedNumQuestions]);
+  // --- State Initialization ---
+  // Attempt to load from context first, then generate new if needed
+  const [examQuestions, setExamQuestions] = useState<Question[]>(examProgress?.questions ?? []);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(examProgress?.currentIndex ?? 0);
+  const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>(examProgress?.answers ?? {});
+  const [examStartTime, setExamStartTime] = useState<number>(examProgress?.startTime ?? Date.now());
+  const [configNumQuestions, setConfigNumQuestions] = useState<number>(examProgress?.configNumQuestions ?? 0); // Store the requested number for saving
 
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>({}); // Store answers by question_number
+  const [isInitialized, setIsInitialized] = useState(!!examProgress); // Track if loaded from progress
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [examStartTime] = useState(Date.now()); // Record start time
-  const [isSheetOpen, setIsSheetOpen] = useState(false); // State for overview sheet
+  const [isSheetOpen, setIsSheetOpen] = useState(false);
 
-
+  // --- Initialization Effect ---
   useEffect(() => {
-    // Redirect if no questions loaded initially
-    if (allQuestions.length === 0) {
-       toast({ title: "No Questions Loaded", description: "Redirecting to import page.", variant: "destructive" });
+    // If not loaded from existing progress and have questions, initialize a new exam
+    if (!isInitialized && allQuestions.length > 0) {
+        const requestedNum = parseInt(requestedNumQuestionsParam || '10', 10);
+        if (requestedNum <= 0) {
+            toast({ title: "Exam Configuration Error", description: "Invalid number of questions requested. Redirecting.", variant: "destructive" });
+            router.push('/exam/config');
+            return;
+        }
+
+        const numToTake = Math.min(requestedNum, allQuestions.length);
+        if (numToTake === 0) {
+             toast({ title: "No Questions Available", description: "Cannot start exam with zero questions.", variant: "destructive" });
+             router.push('/');
+             return;
+        }
+
+        const shuffled = shuffleArray(allQuestions);
+        const selectedQuestions = shuffled.slice(0, numToTake);
+        const startTime = Date.now();
+
+        setExamQuestions(selectedQuestions);
+        setCurrentQuestionIndex(0);
+        setUserAnswers({});
+        setExamStartTime(startTime);
+        setConfigNumQuestions(numToTake); // Store the actual number taken
+        setIsInitialized(true); // Mark as initialized
+
+         console.log("Initialized new exam with", numToTake, "questions.");
+
+         // Save initial state to context/localStorage
+         setExamProgress({
+            questions: selectedQuestions,
+            currentIndex: 0,
+            answers: {},
+            startTime: startTime,
+            configNumQuestions: numToTake,
+         });
+
+    } else if (allQuestions.length === 0 && !examProgress) {
+      // If no questions and no progress, redirect
+      toast({ title: "No Questions Loaded", description: "Redirecting to import page.", variant: "destructive" });
       router.push('/');
-    } else if (examQuestions.length === 0 && allQuestions.length > 0) {
-        // This case might happen if requestedNumQuestions is 0 or invalid
-        toast({ title: "Exam Configuration Error", description: "Invalid number of questions. Redirecting to config.", variant: "destructive" });
+    } else if (isInitialized && examProgress && examQuestions.length === 0) {
+        // This case might mean invalid progress was loaded
+        toast({ title: "Exam State Error", description: "Invalid exam progress detected. Clearing and redirecting.", variant: "destructive" });
+        clearExamProgress();
         router.push('/exam/config');
     }
-  }, [allQuestions, examQuestions, router, toast]);
 
-   const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
+  }, [allQuestions, requestedNumQuestionsParam, router, toast, isInitialized, examProgress, setExamProgress, clearExamProgress, examQuestions.length]); // Added examProgress dependencies
+
+
+   // --- Effect to Save Progress ---
+   useEffect(() => {
+     // Only save progress if the exam is initialized and has questions
+     if (isInitialized && examQuestions.length > 0) {
+        setExamProgress(prev => ({
+            // Use existing questions/startTime/configNum if available, otherwise update
+            questions: prev?.questions ?? examQuestions,
+            startTime: prev?.startTime ?? examStartTime,
+            configNumQuestions: prev?.configNumQuestions ?? configNumQuestions,
+            // Update current index and answers
+            currentIndex: currentQuestionIndex,
+            answers: userAnswers,
+        }));
+     }
+   }, [currentQuestionIndex, userAnswers, setExamProgress, isInitialized, examQuestions, examStartTime, configNumQuestions]);
+
+
+  // --- Event Handlers ---
+  const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
     setUserAnswers(prev => {
       const currentAnswer = prev[questionNumber] || { question_number: questionNumber, selected_answers: [] };
       const question = examQuestions.find(q => q.question_number === questionNumber);
-      if (!question) return prev; // Safeguard
+      if (!question) return prev;
 
       const isMultipleChoice = question.correct_answer.length > 1;
-
-       let newSelectedAnswers: string[];
+      let newSelectedAnswers: string[];
 
       if (isMultipleChoice) {
-        // Add or remove for checkboxes
         if (checked) {
           newSelectedAnswers = [...currentAnswer.selected_answers, answerKey];
         } else {
           newSelectedAnswers = currentAnswer.selected_answers.filter(ans => ans !== answerKey);
         }
       } else {
-        // Replace for radio buttons
         newSelectedAnswers = [answerKey];
       }
-       return {
+      return {
         ...prev,
-        [questionNumber]: { ...currentAnswer, selected_answers: newSelectedAnswers.sort() } // Keep answers sorted for consistency
+        [questionNumber]: { ...currentAnswer, selected_answers: newSelectedAnswers.sort() }
       };
     });
-  }, [examQuestions]); // Depend on examQuestions
+  }, [examQuestions]);
 
   const goToNextQuestion = useCallback(() => {
     if (currentQuestionIndex < examQuestions.length - 1) {
@@ -99,199 +150,199 @@ export default function ExamTakePage() {
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev + 1); // Corrected typo: should be prev - 1
+      setCurrentQuestionIndex(prev => prev - 1);
     }
   }, [currentQuestionIndex]);
 
-   const goToHome = useCallback(() => {
+  const goToHome = useCallback(() => {
+    // Decide if progress should be cleared when manually going home
+    // clearExamProgress(); // Currently progress persists unless submitted or explicitly cleared
     router.push('/');
-   }, [router]);
+  }, [router]);
 
-   const navigateToQuestion = useCallback((index: number) => {
-     if (index >= 0 && index < examQuestions.length) {
-         setCurrentQuestionIndex(index);
-         setIsSheetOpen(false); // Close sheet after navigation
-     }
-   }, [examQuestions.length]);
-
+  const navigateToQuestion = useCallback((index: number) => {
+    if (index >= 0 && index < examQuestions.length) {
+      setCurrentQuestionIndex(index);
+      setIsSheetOpen(false);
+    }
+  }, [examQuestions.length]);
 
   const handleSubmitExam = useCallback(async () => {
-     if (isSubmitting) return; // Prevent double submission
-     setIsSubmitting(true);
-     toast({ title: "Submitting Exam...", description: "Calculating your results." });
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    toast({ title: "Submitting Exam...", description: "Calculating your results." });
 
     let correctCount = 0;
     const incorrectQuestionsDetail = [];
 
     for (const question of examQuestions) {
-       const userAnswer = userAnswers[question.question_number];
-       const selected = userAnswer?.selected_answers || [];
-       const correct = [...question.correct_answer].sort(); // Ensure correct answers are sorted for comparison
+      const userAnswer = userAnswers[question.question_number];
+      const selected = userAnswer?.selected_answers || [];
+      const correct = [...question.correct_answer].sort();
+      const sortedSelected = [...selected].sort();
+      const isCorrect = sortedSelected.length === correct.length &&
+                        sortedSelected.every((value, index) => value === correct[index]);
 
-       // Ensure selected is also sorted (should be handled in handleAnswerChange, but double-check)
-       const sortedSelected = [...selected].sort();
-
-       const isCorrect = sortedSelected.length === correct.length &&
-                         sortedSelected.every((value, index) => value === correct[index]);
-
-       if (isCorrect) {
-         correctCount++;
-       } else {
-         incorrectQuestionsDetail.push({
-           question_number: question.question_number,
-           question_text: question.question_text,
-           options: question.options,
-           user_answer: sortedSelected, // Store the sorted user answer
-           correct_answer: correct, // Store the sorted correct answer
-           explanation: question.explanation,
-           image_url: question.image_url,
-         });
-       }
+      if (isCorrect) {
+        correctCount++;
+      } else {
+        incorrectQuestionsDetail.push({
+          question_number: question.question_number,
+          question_text: question.question_text,
+          options: question.options,
+          user_answer: sortedSelected,
+          correct_answer: correct,
+          explanation: question.explanation,
+          image_url: question.image_url,
+        });
+      }
     }
 
-     const score = examQuestions.length > 0 ? (correctCount / examQuestions.length) * 100 : 0;
-     const examEndTime = Date.now();
-     const duration = Math.round((examEndTime - examStartTime) / 1000); // Duration in seconds
+    const score = examQuestions.length > 0 ? (correctCount / examQuestions.length) * 100 : 0;
+    const examEndTime = Date.now();
+    const duration = Math.round((examEndTime - examStartTime) / 1000); // Duration in seconds
 
-     // Prepare record for Firestore (without id, using server timestamp)
-     const recordData = {
-       userId: 'anonymous', // Replace with actual user ID if auth is implemented
-       score: parseFloat(score.toFixed(2)),
-       totalQuestions: examQuestions.length,
-       correctCount: correctCount,
-       // timestamp will be added by Firestore
-       incorrectQuestions: incorrectQuestionsDetail,
-       duration: duration,
-     };
+    const recordData = {
+      userId: 'anonymous',
+      score: parseFloat(score.toFixed(2)),
+      totalQuestions: examQuestions.length,
+      correctCount: correctCount,
+      incorrectQuestions: incorrectQuestionsDetail,
+      duration: duration,
+    };
 
-
-     try {
-        // Save to Firestore
-        const docId = await saveExamRecord(recordData);
-
-        // Create the full record for local state/context (including ID and client-side timestamp)
-        const fullRecord: ExamRecord = {
-            ...recordData,
-            id: docId,
-            timestamp: examStartTime, // Use start time for local display consistency
-        };
-
-        // Update local context/state
-        addExamRecord(fullRecord);
-
-        toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
-        router.push(`/exam/results?recordId=${docId}`);
-
-     } catch (error) {
-        console.error("Failed to save exam record:", error);
-        toast({ title: "Submission Failed", description: "Could not save exam results. Please try again.", variant: "destructive" });
-        setIsSubmitting(false); // Re-enable button on error
-     }
-
+    try {
+      const docId = await saveExamRecord(recordData);
+      const fullRecord: ExamRecord = {
+        ...recordData,
+        id: docId,
+        timestamp: examStartTime, // Use start time for local display consistency
+      };
+      addExamRecord(fullRecord); // This also clears examProgress via context
+      toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
+      router.push(`/exam/results?recordId=${docId}`);
+    } catch (error) {
+      console.error("Failed to save exam record:", error);
+      toast({ title: "Submission Failed", description: "Could not save exam results. Please try again.", variant: "destructive" });
+      setIsSubmitting(false);
+    }
   }, [examQuestions, userAnswers, examStartTime, addExamRecord, router, toast, isSubmitting]);
 
 
-  // Loading/Redirect state
-  if (examQuestions.length === 0) {
-    return <div className="container mx-auto p-4 text-center">Loading exam questions or redirecting...</div>;
+   // --- Render Logic ---
+  if (!isInitialized || examQuestions.length === 0) {
+    return <div className="container mx-auto p-4 text-center">Loading exam...</div>;
   }
 
   const currentQuestion = examQuestions[currentQuestionIndex];
-   // Safeguard in case currentQuestion becomes undefined temporarily
-   if (!currentQuestion) {
-       return <div className="container mx-auto p-4 text-center">Loading question...</div>;
-   }
+  if (!currentQuestion) {
+    return <div className="container mx-auto p-4 text-center">Loading question...</div>;
+  }
 
-   const currentQuestionNumber = currentQuestion.question_number;
-   const progress = ((currentQuestionIndex + 1) / examQuestions.length) * 100;
-
+  const currentQuestionNumber = currentQuestion.question_number;
+  const progress = ((currentQuestionIndex + 1) / examQuestions.length) * 100;
 
   return (
-    // Adjust max-width for the overall container if needed
     <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 relative">
-        <Button onClick={goToHome} variant="outline" className="absolute top-4 left-4 z-20">
-            <Home className="mr-2 h-4 w-4" /> Back to Home
-        </Button>
+        {/* Header Buttons */}
+        <div className="absolute top-4 left-4 z-20 flex space-x-2">
+            <AlertDialog>
+                <AlertDialogTrigger asChild>
+                    <Button variant="outline">
+                        <LogOut className="mr-2 h-4 w-4" /> Exit Exam
+                    </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Exit Exam?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Your progress will be saved, and you can resume later from the Exam Configuration page.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={goToHome}>Exit</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </div>
 
-        {/* Overview Sheet Trigger */}
-        <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
-            <SheetTrigger asChild>
-                <Button variant="outline" className="absolute top-4 right-4 z-20">
-                    <List className="mr-2 h-4 w-4" /> Overview
-                </Button>
-            </SheetTrigger>
-            <SheetContent className="w-[300px] sm:w-[400px]">
-                <SheetHeader>
-                    <SheetTitle>Exam Overview ({currentQuestionIndex + 1}/{examQuestions.length})</SheetTitle>
-                </SheetHeader>
-                 <QuizOverview
-                    questions={examQuestions}
-                    userAnswers={userAnswers} // Pass answers keyed by question_number
-                    currentQuestionIndex={currentQuestionIndex}
-                    navigateToQuestion={navigateToQuestion}
-                    mode="exam"
-                />
-            </SheetContent>
-        </Sheet>
+
+      {/* Overview Sheet Trigger */}
+      <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
+        <SheetTrigger asChild>
+          <Button variant="outline" className="absolute top-4 right-4 z-20">
+            <List className="mr-2 h-4 w-4" /> Overview
+          </Button>
+        </SheetTrigger>
+        <SheetContent className="w-[300px] sm:w-[400px]">
+          <SheetHeader>
+            <SheetTitle>Exam Overview ({currentQuestionIndex + 1}/{examQuestions.length})</SheetTitle>
+          </SheetHeader>
+          <QuizOverview
+            questions={examQuestions}
+            userAnswers={userAnswers} // Pass answers keyed by question_number
+            currentQuestionIndex={currentQuestionIndex}
+            navigateToQuestion={navigateToQuestion}
+            mode="exam"
+          />
+        </SheetContent>
+      </Sheet>
 
       <h1 className="text-3xl font-bold mb-4 mt-12">Exam Mode</h1>
-       {/* Ensure progress bar also uses appropriate width */}
       <div className="w-full max-w-4xl mb-4">
-         <Progress value={progress} className="w-full h-2" />
-         <p className="text-sm text-muted-foreground text-center mt-1">
-           Question {currentQuestionIndex + 1} of {examQuestions.length}
-         </p>
+        <Progress value={progress} className="w-full h-2" />
+        <p className="text-sm text-muted-foreground text-center mt-1">
+          Question {currentQuestionIndex + 1} of {examQuestions.length}
+        </p>
       </div>
 
-        {/* Ensure the QuestionCard container takes the correct width */}
-       <div className="w-full max-w-4xl">
-            <QuestionCard
-            key={currentQuestionNumber} // Force re-render on question change
-            question={currentQuestion}
-            selectedAnswers={userAnswers[currentQuestionNumber]?.selected_answers || []}
-            onAnswerChange={(answerKey, checked) => handleAnswerChange(currentQuestionNumber, answerKey, checked)}
-            questionIndex={currentQuestionIndex}
-            totalQuestions={examQuestions.length}
-            isDisabled={isSubmitting} // Disable card when submitting
-            />
-       </div>
+      <div className="w-full max-w-4xl">
+        <QuestionCard
+          key={currentQuestionNumber}
+          question={currentQuestion}
+          selectedAnswers={userAnswers[currentQuestionNumber]?.selected_answers || []}
+          onAnswerChange={(answerKey, checked) => handleAnswerChange(currentQuestionNumber, answerKey, checked)}
+          questionIndex={currentQuestionIndex}
+          totalQuestions={examQuestions.length}
+          isDisabled={isSubmitting}
+        />
+      </div>
 
-
-        {/* Navigation/Submit card should also match width */}
-       <Card className="w-full max-w-4xl mx-auto mt-6 shadow-md rounded-lg">
-         <CardContent className="flex justify-between p-4 items-center">
+      <Card className="w-full max-w-4xl mx-auto mt-6 shadow-md rounded-lg">
+        <CardContent className="flex justify-between p-4 items-center">
           <Button onClick={goToPreviousQuestion} disabled={currentQuestionIndex === 0 || isSubmitting} variant="outline">
             <ArrowLeft className="mr-2 h-4 w-4" /> Previous
           </Button>
 
           {currentQuestionIndex === examQuestions.length - 1 ? (
-             <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button variant="destructive" disabled={isSubmitting}>
-                    <CheckCircle className="mr-2 h-4 w-4" /> Submit Exam
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Confirm Submission</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Are you sure you want to submit your exam? You cannot change your answers after submitting.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel disabled={isSubmitting}>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={handleSubmitExam} disabled={isSubmitting}>
-                      {isSubmitting ? 'Submitting...' : 'Submit'}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isSubmitting}>
+                  <CheckCircle className="mr-2 h-4 w-4" /> Submit Exam
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirm Submission</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to submit your exam? You cannot change your answers after submitting. Your progress will be cleared.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={isSubmitting}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleSubmitExam} disabled={isSubmitting}>
+                    {isSubmitting ? 'Submitting...' : 'Submit'}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           ) : (
             <Button onClick={goToNextQuestion} disabled={isSubmitting}>
               Next <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           )}
-         </CardContent>
+        </CardContent>
       </Card>
     </div>
   );
