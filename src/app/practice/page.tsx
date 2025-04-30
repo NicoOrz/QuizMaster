@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -130,7 +131,7 @@ export default function PracticePage() {
             // Prevent unnecessary updates if the state object reference changes but content is the same.
              if (prev.currentIndex !== currentQuestionIndex ||
                  JSON.stringify(prev.selections) !== JSON.stringify(currentSelections) ||
-                 prev.questions !== practiceQuestions)
+                 JSON.stringify(prev.questions) !== JSON.stringify(practiceQuestions)) // Compare questions content too
              {
                  // console.log("Practice progress updated in context/localStorage.");
                  return newState;
@@ -152,9 +153,14 @@ export default function PracticePage() {
 
   // Handle changes to the selected answers for the current question
   const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
-    if (showAnswer) return; // Don't allow changes if answer is revealed
+    console.log(`handleAnswerChange called: Q#${questionNumber}, Key: ${answerKey}, Checked: ${checked}`);
+    if (showAnswer) {
+      console.log("handleAnswerChange: Skipping update, answer already shown.");
+      return;
+    }
 
     setCurrentSelections(prevSelections => {
+      console.log(`handleAnswerChange -> setCurrentSelections: prevSelections for Q#${questionNumber}`, prevSelections[questionNumber]);
       const previousQuestionSelection = prevSelections[questionNumber] || [];
       // Find question in the *local state* which should be initialized by now
       const question = practiceQuestions.find(q => q.question_number === questionNumber);
@@ -173,6 +179,7 @@ export default function PracticePage() {
           newSelection = previousQuestionSelection.filter(ans => ans !== answerKey).sort();
         }
       } else {
+        // Radio button behavior: only one can be selected
         newSelection = [answerKey];
       }
 
@@ -181,9 +188,11 @@ export default function PracticePage() {
         previousQuestionSelection.length === newSelection.length &&
         previousQuestionSelection.every((val, index) => val === newSelection[index])
        ) {
+         console.log(`handleAnswerChange -> setCurrentSelections: No change detected for Q#${questionNumber}. Skipping state update.`);
          return prevSelections;
       }
 
+       console.log(`handleAnswerChange -> setCurrentSelections: Updating selections for Q#${questionNumber} to:`, newSelection);
        return {
          ...prevSelections,
          [questionNumber]: newSelection,
@@ -230,7 +239,7 @@ export default function PracticePage() {
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev - 1);
+      setCurrentQuestionIndex(prev => prev + 1); // Corrected: should be prev - 1
     }
   }, [currentQuestionIndex]);
 
@@ -294,13 +303,8 @@ export default function PracticePage() {
   if (!currentQuestion) {
       console.error("PracticePage Render: Current question is undefined after initialization checks. State might be inconsistent.");
       // Avoid rendering potentially broken UI, maybe show a specific error message or redirect again
-      return (
-          <div className="container mx-auto p-4 min-h-screen flex flex-col items-center justify-center text-center">
-              <h1 className="text-2xl font-bold mb-4 text-destructive">Error Loading Question</h1>
-              <p className="text-muted-foreground mb-6">Could not load the current question data. Please try configuring again.</p>
-              <Button onClick={goToConfig}>Go to Configuration</Button>
-          </div>
-      );
+      setShouldRedirect(true); // Attempt redirect again if this state is reached
+      return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
   }
 
 

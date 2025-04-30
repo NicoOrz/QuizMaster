@@ -15,7 +15,7 @@ interface QuestionCardProps {
   selectedAnswers: string[]; // Currently selected by the user before checking/submitting
   // This function should come from the parent (PracticePage or ExamTakePage)
   // And it should be stable (e.g., wrapped in useCallback)
-  onAnswerChange: (answerKey: string, checked: boolean) => void;
+  onAnswerChange: (questionNumber: number, answerKey: string, checked: boolean) => void; // Ensure questionNumber is passed
   questionIndex: number;
   totalQuestions: number;
   revealAnswers?: boolean; // Renamed from isReviewMode
@@ -33,7 +33,9 @@ const isValidUrl = (urlString: string | undefined): boolean => {
   } catch (_) {
     // Attempt to parse as a relative path if absolute URL fails
     // This is a basic check and might need refinement based on expected relative URL formats
-    return urlString.startsWith('/') && !urlString.includes(' ');
+    // For now, let's consider only absolute URLs valid for simplicity with the proxy
+    // return urlString.startsWith('/') && !urlString.includes(' ');
+    return false; // Treat relative paths as invalid for now
   }
 };
 
@@ -86,39 +88,32 @@ export function QuestionCard({
     }
   };
 
-  if (isValidUrl(question.image_url)) {
-    const originalUrl = question.image_url!; // Assert non-null because isValidUrl checked
-    if (needsProxy(originalUrl)) {
-        try {
-            // Use absolute URL for proxy to avoid issues with relative paths
-            const proxied = `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
-            // Simple check if the proxy URL looks valid (starts with /)
-            if (proxied.startsWith('/')) {
-                 finalImageUrl = proxied;
-                // console.log(`Using proxy for image: ${originalUrl} -> ${finalImageUrl}`);
+  if (question.image_url && question.image_url.trim() !== '') {
+      const originalUrl = question.image_url;
+      if (isValidUrl(originalUrl)) {
+            if (needsProxy(originalUrl)) {
+                try {
+                    // Use absolute URL for proxy to avoid issues with relative paths
+                    const proxied = `/api/image-proxy?url=${encodeURIComponent(originalUrl)}`;
+                    // Simple check if the proxy URL looks valid (starts with /)
+                    if (proxied.startsWith('/')) {
+                         finalImageUrl = proxied;
+                         // console.log(`Using proxy for image: ${originalUrl} -> ${finalImageUrl}`);
+                    } else {
+                        console.warn(`Generated proxy URL is invalid: ${proxied}`);
+                    }
+
+                } catch (error) {
+                    console.error("Error encoding image URL for proxy:", originalUrl, error);
+                    // Keep finalImageUrl null
+                }
             } else {
-                console.warn(`Generated proxy URL is invalid: ${proxied}`);
+                // Use original valid URL if no proxy needed and it's valid
+                finalImageUrl = originalUrl;
             }
-
-        } catch (error) {
-            console.error("Error encoding image URL for proxy:", originalUrl, error);
-            // Keep finalImageUrl null
-        }
-    } else {
-         // Check if the non-proxied URL is valid before assigning
-         if (isValidUrl(originalUrl)) {
-            finalImageUrl = originalUrl; // Use original valid URL if no proxy needed
-         } else {
-            console.warn(`Original image URL is invalid: ${originalUrl}`);
-         }
-
-    }
-  } else {
-     // Log only if a non-empty, invalid URL was actually provided
-     if (question.image_url && question.image_url.trim() !== '') {
-       console.warn(`Invalid image URL provided for Q#${question.question_number}: ${question.image_url}`);
-     }
-     // Keep finalImageUrl null if original is invalid or missing/empty
+      } else {
+          console.warn(`Invalid image URL provided for Q#${question.question_number}: ${originalUrl}`);
+      }
   }
   // --- End Image Proxy and Validation Logic ---
 
@@ -128,13 +123,17 @@ export function QuestionCard({
     <Card key={question.question_number} className="w-full max-w-4xl mx-auto shadow-md rounded-lg mb-6 overflow-hidden">
        <div className="md:grid md:grid-cols-2 md:gap-0"> {/* Use gap-0 to make border seamless */}
           {/* Left Column: Question Info */}
-          <div className="border-b md:border-b-0 md:border-r border-border">
-             <CardHeader className="p-6">
+          <div className="border-b md:border-b-0 md:border-r border-border p-6"> {/* Added padding here */}
+             <CardHeader className="p-0 mb-4"> {/* Remove padding from header */}
                <CardTitle className="text-lg font-semibold mb-4">
                  Question {questionIndex + 1} of {totalQuestions}
                </CardTitle>
-               {/* Conditionally render the image container only if finalImageUrl is valid */}
-               {finalImageUrl && ( // No need for extra isValidUrl check here, it's already done above
+               {/* Use whitespace-pre-wrap to respect newlines from JSON */}
+               {/* Render description above the image */}
+               <CardDescription className="text-foreground pt-2 whitespace-pre-wrap">{question.question_text}</CardDescription>
+             </CardHeader>
+             {/* Conditionally render the image container only if finalImageUrl is valid */}
+             {finalImageUrl && (
                  <div className="mb-4 relative aspect-video w-full"> {/* Use aspect-video for consistent ratio */}
                    <Image
                      src={finalImageUrl}
@@ -142,9 +141,8 @@ export function QuestionCard({
                      fill
                      style={{ objectFit: 'contain' }}
                      className="rounded-md"
-                     // Decide on unoptimization. Often needed for proxied or external non-CDN images.
-                     // Consider making this conditional based on the source or if proxying occurred.
-                     unoptimized={true} // Let's try always unoptimized for simplicity with the proxy
+                     // Unoptimize proxied images or those not from a known performant source
+                     unoptimized={true}
                      onError={(e) => {
                        console.error(`Error loading image for Q#${question.question_number}: ${finalImageUrl}`, e);
                        // Optionally set to a broken image placeholder or hide the element
@@ -155,10 +153,7 @@ export function QuestionCard({
                      priority={questionIndex === 0} // Prioritize loading the first image
                    />
                  </div>
-               )}
-               {/* Use whitespace-pre-wrap to respect newlines from JSON */}
-               <CardDescription className="text-foreground pt-2 whitespace-pre-wrap">{question.question_text}</CardDescription>
-             </CardHeader>
+             )}
           </div>
 
           {/* Right Column: Options */}
@@ -173,7 +168,8 @@ export function QuestionCard({
                          checked={selectedAnswers.includes(key)}
                          // Use the provided onAnswerChange handler directly
                          onCheckedChange={(checked) => {
-                           onAnswerChange(key, !!checked);
+                           console.log(`Checkbox changed: Q#${question.question_number}, Key: ${key}, Checked: ${!!checked}`);
+                           onAnswerChange(question.question_number, key, !!checked);
                          }}
                          disabled={isDisabled} // Disable based on prop
                          aria-label={`Option ${key}`}
@@ -196,9 +192,10 @@ export function QuestionCard({
                     // Use the provided onAnswerChange handler directly
                     onValueChange={(value) => {
                         if (value) {
+                            console.log(`RadioGroup changed: Q#${question.question_number}, Value: ${value}`);
                            // For radio groups, checking one implies unchecking others (handled by RadioGroup),
                            // but we just need to signal the change for the selected one.
-                           onAnswerChange(value, true);
+                           onAnswerChange(question.question_number, value, true);
                         }
                     }}
                     disabled={isDisabled} // Disable based on prop
