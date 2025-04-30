@@ -62,6 +62,7 @@ export default function PracticePage() {
              setIsComponentInitialized(true);
              setShowAnswer(false);
              setIsCorrect(null);
+             setShouldRedirect(false); // Explicitly set redirect to false on successful load
         } else {
              console.warn("PracticePage: Invalid practice progress structure. Clearing and redirecting.", practiceProgress);
              toast({ title: "Invalid Progress", description: "Clearing invalid session data.", variant: "destructive" });
@@ -270,9 +271,7 @@ export default function PracticePage() {
         const practiceEndTime = Date.now();
         const duration = practiceStartTime ? Math.round((practiceEndTime - practiceStartTime) / 1000) : undefined;
 
-        const result: PracticeResult = {
-            // Generate a temporary ID here, context will add the final one
-            id: `temp-${practiceEndTime}`,
+        const resultData: Omit<PracticeResult, 'id'> = {
             score: parseFloat(score.toFixed(2)),
             totalQuestions: practiceQuestions.length,
             correctCount: correctCount,
@@ -282,15 +281,12 @@ export default function PracticePage() {
             range: practiceProgress.range, // Include the range practiced
         };
 
-        addPracticeResult(result); // Store result in context history & clear progress
+        const savedResult = addPracticeResult(resultData); // Store result in context history & clear progress
+
         toast({ title: "Practice Finished!", description: "Showing your results." });
 
-        // Find the newly added result in the updated history to get its real ID
-        // Note: This relies on addPracticeResult updating the history synchronously
-        // or having a slight delay before navigating. Let's assume sync for now.
-        // A better approach might be for addPracticeResult to return the added result with ID.
-        // For now, let's just navigate to the general results page.
-        router.push(`/practice/results?resultId=${result.id}`); // Use the temporary ID for navigation
+        // Navigate using the final ID returned from context
+        router.push(`/practice/results?resultId=${savedResult.id}`);
 
    }, [practiceQuestions, currentSelections, practiceProgress, practiceStartTime, addPracticeResult, router, toast]);
 

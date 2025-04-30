@@ -30,11 +30,8 @@ interface QuizContextProps {
   // Practice History
   practiceHistory: PracticeResult[];
   setPracticeHistory: Dispatch<SetStateAction<PracticeResult[]>>;
-  addPracticeResult: (result: PracticeResult) => void;
+  addPracticeResult: (result: Omit<PracticeResult, 'id'>) => PracticeResult; // Returns the added result with ID
 
-  // Removed: Temporary state for practice results
-  // lastPracticeResult: PracticeResult | null;
-  // setLastPracticeResult: Dispatch<SetStateAction<PracticeResult | null>>;
 }
 
 const QuizContext = createContext<QuizContextProps | undefined>(undefined);
@@ -138,7 +135,6 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   const [practiceProgress, setPracticeProgress] = useState<PracticeProgress | null>(null);
   const [examProgress, setExamProgress] = useState<ExamProgress | null>(null);
   const [isInitialized, setIsInitialized] = useState(false); // Track client-side initialization
-  // Removed: const [lastPracticeResult, setLastPracticeResult] = useState<PracticeResult | null>(null);
 
   // Effect to load data from localStorage *only on the client*
   useEffect(() => {
@@ -220,16 +216,18 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
     clearExamProgress();
   }, [clearExamProgress]);
 
-   // Function to add a new practice result
-   const addPracticeResult = useCallback((result: PracticeResult) => {
+   // Function to add a new practice result and return it with the final ID
+   const addPracticeResult = useCallback((result: Omit<PracticeResult, 'id'>): PracticeResult => {
+     // Generate a simple local ID for practice results
+     const resultWithId: PracticeResult = { ...result, id: `practice-${Date.now()}-${Math.random()}` };
      setPracticeHistory(prev => {
-        // Generate a simple local ID for practice results
-        const resultWithId = { ...result, id: `practice-${Date.now()}-${Math.random()}` };
+        // Note: We use resultWithId here which already has the ID
         const newState = [resultWithId, ...prev].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
         return newState;
      });
      // Clear practice progress after finishing
      clearPracticeProgress();
+     return resultWithId; // Return the result including the generated ID
    }, [clearPracticeProgress]);
 
 
@@ -253,8 +251,6 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
         practiceHistory, // Provide practice history
         setPracticeHistory, // Provide setter
         addPracticeResult, // Provide add function
-        // Removed: lastPracticeResult,
-        // Removed: setLastPracticeResult,
       }}
     >
       {children}
