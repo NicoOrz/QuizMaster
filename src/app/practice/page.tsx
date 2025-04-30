@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { ArrowLeft, ArrowRight, Home, Check, X, List, RotateCcw, Settings } from 'lucide-react'; // Added Settings
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import type { Question } from '@/types/quiz';
+import type { Question, PracticeProgress } from '@/types/quiz';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { QuizOverview } from '@/components/quiz/QuizOverview';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -75,34 +75,55 @@ export default function PracticePage() {
 
   // Effect to update practice progress in context whenever index or selections change
   useEffect(() => {
-    // Only save if initialized and there are questions and progress object exists
-    if (isInitialized && practiceQuestions.length > 0 && practiceProgress) {
-         setPracticeProgress(prev => {
-            // Ensure prev is not null before spreading
+    // Only save if initialized and there are questions
+    if (isInitialized && practiceQuestions.length > 0) {
+        setPracticeProgress(prev => {
+            // If there's no previous progress context (e.g., cleared), don't try to update it.
+            // This might happen if clearPracticeProgress is called concurrently.
             if (!prev) return null;
-            // Only update if index or selections actually changed from the stored progress
-            if (prev.currentIndex === currentQuestionIndex && prev.selections === currentSelections) {
-                return prev; // No change, return previous object reference
-            }
-            // Return new object with updated values
-            return {
-                ...prev,
+
+            // Create the potential new state based *only* on current local state
+            const newState: PracticeProgress = {
+                ...prev, // Keep existing range, etc. from the previous valid state
                 currentIndex: currentQuestionIndex,
                 selections: currentSelections,
+                questions: practiceQuestions, // Ensure questions are also up-to-date in the progress object
+                range: prev.range // Explicitly carry over the range
             };
-         });
-     }
-  }, [currentQuestionIndex, currentSelections, setPracticeProgress, isInitialized, practiceQuestions.length, practiceProgress]); // Include practiceProgress
+
+            // Check if essential parts have changed compared to the existing progress state (prev)
+            // This prevents unnecessary updates if the state object reference changes but content is the same.
+             if (prev.currentIndex !== currentQuestionIndex ||
+                 prev.selections !== currentSelections || // Shallow compare is okay if handleAnswerChange ensures new object on change
+                 prev.questions !== practiceQuestions) { // Check if the question set changed (e.g., reconfigured)
+                // console.log("Practice progress updated in context/localStorage.");
+                return newState; // Return the new state object
+             }
+
+            // If nothing relevant changed, return the previous state object reference to prevent infinite loops
+            // console.log("Skipping practice progress update, no change detected.");
+            return prev;
+        });
+    }
+  }, [
+      isInitialized,
+      practiceQuestions, // Depends on the current set of questions
+      currentQuestionIndex, // Depends on the current index
+      currentSelections, // Depends on the current selections object
+      setPracticeProgress // Depends on the context setter function
+  ]); // Remove direct dependency on `practiceProgress` itself
 
 
   // Handle changes to the selected answers for the current question
+  // Wrapped in useCallback to ensure stability when passed to QuestionCard
   const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
     if (showAnswer) return; // Don't allow changes if answer is revealed
 
-    setCurrentSelections(prev => {
-      const previousQuestionSelection = prev[questionNumber] || [];
+    // Use functional update form of setState for reliability
+    setCurrentSelections(prevSelections => {
+      const previousQuestionSelection = prevSelections[questionNumber] || [];
       const question = practiceQuestions.find(q => q.question_number === questionNumber);
-      if (!question) return prev; // Return previous state if question not found
+      if (!question) return prevSelections; // Return previous state if question not found
 
       const isMultipleChoice = question.correct_answer.length > 1;
       let newSelection: string[];
@@ -121,24 +142,21 @@ export default function PracticePage() {
       }
 
       // Optimization: Check if the actual selection for this question *changed*
-      // This prevents unnecessary state updates if the logic results in the same array content and order
       if (
         previousQuestionSelection.length === newSelection.length &&
         previousQuestionSelection.every((val, index) => val === newSelection[index]) // Assumes both are sorted
        ) {
-         // console.log(`Skipping update for Q#${questionNumber}, selection unchanged.`);
-         return prev; // Return the previous state object reference if no change occurred
+         return prevSelections; // Return the previous state object reference if no change occurred
       }
 
       // Create a *new* state object only if there was a change
-      const newState = {
-        ...prev,
-        [questionNumber]: newSelection,
-      };
-       console.log(`Answer changed for Q#${questionNumber}: ${newState[questionNumber]}`);
-       return newState; // Return the new state object
+      // console.log(`Answer changed for Q#${questionNumber}: ${newSelection}`);
+       return {
+         ...prevSelections,
+         [questionNumber]: newSelection,
+       }; // Return the new state object
     });
-  }, [showAnswer, practiceQuestions]); // Depend on practiceQuestions
+  }, [showAnswer, practiceQuestions]); // Depend on showAnswer and practiceQuestions
 
 
   // Check the answer for the current question
@@ -153,8 +171,7 @@ export default function PracticePage() {
         return;
     }
 
-     // If already showing answer, maybe reset or do nothing? Currently just re-checks.
-     // Let's prevent re-checking if already shown.
+     // If already showing answer, do nothing.
      if (showAnswer) return;
 
 
@@ -180,8 +197,7 @@ export default function PracticePage() {
     }
   }, [currentQuestionIndex, practiceQuestions.length]);
 
-  // Corrected goToPreviousQuestion
-  const correctedGoToPreviousQuestion = useCallback(() => {
+  const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
       setCurrentQuestionIndex(prev => prev - 1); // Corrected logic
       // Feedback state reset is handled by the index change effect
@@ -221,9 +237,12 @@ export default function PracticePage() {
 
   // If initialized and currentQuestion is somehow still undefined (shouldn't happen with checks)
   if (!currentQuestion) {
-      toast({ title: "Error", description: "Could not load current question. Redirecting.", variant: "destructive"});
+      // This might happen momentarily if practiceProgress becomes null unexpectedly
+      console.error("Current question is undefined. Practice state might be inconsistent.");
+      // Don't toast immediately, maybe log and redirect gracefully
+      // toast({ title: "Error", description: "Could not load current question. Redirecting.", variant: "destructive"});
       router.replace('/practice/config');
-      return <div className="container mx-auto p-4 text-center">Error loading question...</div>;
+      return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
   }
 
 
@@ -297,7 +316,7 @@ export default function PracticePage() {
           key={currentQuestionNumber} // Ensure re-render on question change
           question={currentQuestion}
           selectedAnswers={currentSelectionForCard}
-          onAnswerChange={handleAnswerChange} // Use the optimized handler
+          onAnswerChange={handleAnswerChange} // Pass the stable callback
           questionIndex={currentQuestionIndex}
           totalQuestions={practiceQuestions.length} // Use length of subset
           revealAnswers={showAnswer} // Pass the state to control feedback visibility in card
@@ -334,7 +353,7 @@ export default function PracticePage() {
       {/* Navigation Section */}
       <Card className="w-full max-w-4xl mx-auto mt-6 shadow-md rounded-lg">
         <CardContent className="flex justify-between p-4 items-center">
-          <Button onClick={correctedGoToPreviousQuestion} disabled={currentQuestionIndex === 0} variant="outline">
+          <Button onClick={goToPreviousQuestion} disabled={currentQuestionIndex === 0} variant="outline">
             <ArrowLeft className="mr-2 h-4 w-4" /> Previous
           </Button>
 
@@ -355,3 +374,4 @@ export default function PracticePage() {
     </div>
   );
 }
+

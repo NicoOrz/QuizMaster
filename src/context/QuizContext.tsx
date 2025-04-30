@@ -49,15 +49,23 @@ const safelyGetLocalStorage = <T,>(key: string, defaultValue: T): T => {
         }
         // Add basic check for empty progress objects that might have been saved incorrectly
         const parsed = JSON.parse(item);
-        if (key === PRACTICE_PROGRESS_KEY && parsed && (!parsed.questions || !Array.isArray(parsed.questions))) {
-            console.warn(`Invalid practice progress structure found in localStorage for key "${key}". Resetting.`);
-            window.localStorage.removeItem(key);
-            return defaultValue;
+
+        // Specific checks for progress structures
+        if (key === PRACTICE_PROGRESS_KEY) {
+           const progress = parsed as PracticeProgress | null;
+            if (progress && (!progress.questions || !Array.isArray(progress.questions) || typeof progress.currentIndex !== 'number' || typeof progress.selections !== 'object')) {
+                console.warn(`Invalid practice progress structure found in localStorage for key "${key}". Resetting.`);
+                window.localStorage.removeItem(key);
+                return defaultValue;
+            }
         }
-         if (key === EXAM_PROGRESS_KEY && parsed && (!parsed.questions || !Array.isArray(parsed.questions))) {
-            console.warn(`Invalid exam progress structure found in localStorage for key "${key}". Resetting.`);
-            window.localStorage.removeItem(key);
-            return defaultValue;
+         if (key === EXAM_PROGRESS_KEY) {
+            const progress = parsed as ExamProgress | null;
+            if (progress && (!progress.questions || !Array.isArray(progress.questions) || typeof progress.currentIndex !== 'number' || typeof progress.answers !== 'object' || typeof progress.startTime !== 'number')) {
+                console.warn(`Invalid exam progress structure found in localStorage for key "${key}". Resetting.`);
+                window.localStorage.removeItem(key);
+                return defaultValue;
+            }
         }
 
         return parsed !== null ? parsed : defaultValue; // Return parsed value or default
@@ -83,13 +91,25 @@ const safelySetLocalStorage = (key: string, value: any) => {
         // Prevent saving null/undefined directly, remove instead if value is nullish
         if (value === null || value === undefined) {
              window.localStorage.removeItem(key);
+             // console.log(`Removed localStorage item for key "${key}" (value was null/undefined).`);
         } else {
-             // Ensure progress objects have the 'questions' array before saving
-             if ((key === PRACTICE_PROGRESS_KEY || key === EXAM_PROGRESS_KEY) && (!value.questions || !Array.isArray(value.questions))) {
-                console.warn(`Attempted to save invalid progress structure for key "${key}". Skipping save.`);
-                return;
+             // Ensure progress objects have the correct structure before saving
+             if (key === PRACTICE_PROGRESS_KEY) {
+                const progress = value as PracticeProgress;
+                if (!progress || !Array.isArray(progress.questions) || typeof progress.currentIndex !== 'number' || typeof progress.selections !== 'object') {
+                    console.warn(`Attempted to save invalid practice progress structure for key "${key}". Skipping save. Value:`, progress);
+                    return;
+                }
              }
+              if (key === EXAM_PROGRESS_KEY) {
+                 const progress = value as ExamProgress;
+                 if (!progress || !Array.isArray(progress.questions) || typeof progress.currentIndex !== 'number' || typeof progress.answers !== 'object' || typeof progress.startTime !== 'number') {
+                    console.warn(`Attempted to save invalid exam progress structure for key "${key}". Skipping save. Value:`, progress);
+                    return;
+                 }
+              }
              window.localStorage.setItem(key, JSON.stringify(value));
+             // console.log(`Saved localStorage item for key "${key}".`);
         }
     } catch (error) {
         console.error(`Error setting localStorage key “${key}”:`, error);
@@ -114,6 +134,7 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
     setExamProgress(safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null));
     setIsLoading(false); // Finish loading after retrieving from storage
     setIsInitialized(true); // Mark initialization complete
+    console.log("QuizContext initialized from localStorage.");
   }, []); // Empty dependency array ensures this runs only once on mount
 
    // --- Effect to Persist All Questions ---
