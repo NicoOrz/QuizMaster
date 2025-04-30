@@ -13,6 +13,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/hooks/use-toast";
 import { Play, Home, AlertTriangle, RotateCcw } from 'lucide-react';
 import type { Question, PracticeProgress } from '@/types/quiz';
+import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton
 
 // Helper to sort questions by question_number numerically
 const sortQuestions = (questions: Question[]) => {
@@ -20,7 +21,8 @@ const sortQuestions = (questions: Question[]) => {
 };
 
 export default function PracticeConfigPage() {
-  const { questions: allQuestions, practiceProgress, clearPracticeProgress, setPracticeProgress, setQuestions } = useQuiz();
+  // Fix: Add isLoading to destructuring
+  const { questions: allQuestions, practiceProgress, clearPracticeProgress, setPracticeProgress, isLoading } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -48,6 +50,9 @@ export default function PracticeConfigPage() {
 
    // Initialize range based on potential existing progress or defaults
    useEffect(() => {
+    // Don't proceed if questions are still loading
+    if (isLoading) return;
+
      if (maxQuestions > 0) {
        const defaultStart = 1;
        const defaultEnd = Math.min(10, maxQuestions);
@@ -80,7 +85,7 @@ export default function PracticeConfigPage() {
         toast({ variant: "destructive", title: "No Questions", description: "Please import a question bank first." });
         router.push('/');
      }
-   }, [allQuestions.length, maxQuestions, practiceProgress, clearPracticeProgress, router, toast, questionIndexMap, setPracticeProgress]); // Add dependencies
+   }, [allQuestions.length, maxQuestions, practiceProgress, clearPracticeProgress, router, toast, questionIndexMap, setPracticeProgress, isLoading]); // Add isLoading dependency
 
 
   const handleSliderChange = (value: number[]) => {
@@ -181,12 +186,26 @@ export default function PracticeConfigPage() {
    };
 
   if (isLoading) {
-     return <div className="container mx-auto p-4 text-center">Loading questions...</div>;
+     return (
+       <div className="container mx-auto p-4 min-h-screen flex flex-col items-center justify-center space-y-6">
+         <Skeleton className="h-10 w-32 absolute top-4 left-4" />
+         <Skeleton className="h-8 w-64" /> {/* Title */}
+         <Skeleton className="w-full max-w-lg h-80" /> {/* Card */}
+       </div>
+     );
   }
 
-  if (maxQuestions === 0) {
+  if (!isLoading && maxQuestions === 0) {
     // Handled by useEffect redirect, but keep a fallback message
-    return <div className="container mx-auto p-4 text-center">No questions loaded. Please import a question bank.</div>;
+    return (
+        <div className="container mx-auto p-4 min-h-screen flex flex-col items-center justify-center text-center">
+             <Button onClick={goToHome} variant="outline" className="absolute top-4 left-4">
+                  <Home className="mr-2 h-4 w-4" /> Back to Home
+             </Button>
+             <h1 className="text-2xl font-bold mb-4">No Questions Loaded</h1>
+             <p className="text-muted-foreground">Please import a question bank before configuring practice.</p>
+        </div>
+    );
   }
 
   const numSelectedQuestions = range[1] - range[0] + 1;
