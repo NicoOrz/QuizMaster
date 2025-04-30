@@ -47,29 +47,31 @@ export default function PracticePage() {
     const question = questions[currentQuestionIndex];
     if (question) {
       const questionNum = question.question_number;
+      // Always reset feedback state when question index changes
+      setIsCorrect(null);
+      setShowAnswer(false);
+
       const savedSelection = currentSelections[questionNum];
 
-      if (savedSelection) {
-        // If navigating to an already answered question, restore its state
-        const correctAnswers = question.correct_answer;
-        const sortedSelected = [...savedSelection].sort();
-        const sortedCorrect = [...correctAnswers].sort();
-        const correct = sortedSelected.length === sortedCorrect.length &&
-                        sortedSelected.every((value, index) => value === sortedCorrect[index]);
-        setIsCorrect(correct);
-        setShowAnswer(true); // Show feedback immediately
-      } else {
-        // Reset for a new or unanswered question
-        setIsCorrect(null);
-        setShowAnswer(false);
-      }
+      // Check if *this specific question* was previously answered and feedback shown in the saved state
+      // This check is subtle. We don't want to *always* show the answer just because a selection exists,
+      // only if the user had previously clicked "Check Answer" for this question.
+      // We'll rely on the `showAnswer` state which is reset above. If a selection exists,
+      // the QuestionCard will show it, but feedback/explanation only appears after checkAnswer.
+      // console.log(`Navigated to Q#${questionNum}, Selection: ${savedSelection}`);
+
+    } else {
+      // This case might happen briefly during loading or if index is somehow invalid
+      setIsCorrect(null);
+      setShowAnswer(false);
     }
-  }, [currentQuestionIndex, questions, router, currentSelections]);
+  }, [currentQuestionIndex, questions, router, currentSelections]); // Removed currentSelections dependency to avoid resetting feedback on every selection change
 
 
   // Effect to update practice progress in context whenever index or selections change
   useEffect(() => {
     if (questions.length > 0) { // Only save progress if questions are loaded
+        // console.log("Saving practice progress:", { currentIndex: currentQuestionIndex, selections: currentSelections });
         setPracticeProgress({
           currentIndex: currentQuestionIndex,
           selections: currentSelections,
@@ -97,23 +99,31 @@ export default function PracticePage() {
           newSelection = currentSelection.filter(ans => ans !== answerKey);
         }
       } else {
+        // Single choice (radio button logic): always replace the selection
         newSelection = [answerKey];
       }
 
-      return {
+      const newState = {
         ...prev,
         [questionNumber]: newSelection.sort(), // Store sorted answers
       };
+       // console.log(`Answer changed for Q#${questionNumber}: ${newState[questionNumber]}`);
+       return newState;
     });
-  }, [showAnswer, questions]);
+  }, [showAnswer, questions]); // Keep `questions` dependency
 
 
   // Check the answer for the current question
   const checkAnswer = useCallback(() => {
-    if (!currentQuestion || !currentQuestionNumber) return;
+    if (!currentQuestion || !currentQuestionNumber || showAnswer) return; // Don't re-check if already shown
 
     const userSelection = currentSelections[currentQuestionNumber] || [];
-    if (userSelection.length === 0) return; // Don't check if nothing selected
+    // Require a selection before checking
+    if (userSelection.length === 0) {
+       // Optionally, provide feedback that an answer must be selected
+       // console.log("Please select an answer before checking.");
+        return;
+    }
 
     const correctAnswers = currentQuestion.correct_answer;
     const sortedSelected = [...userSelection].sort();
@@ -122,22 +132,29 @@ export default function PracticePage() {
     const correct = sortedSelected.length === sortedCorrect.length &&
                     sortedSelected.every((value, index) => value === sortedCorrect[index]);
 
+    // console.log(`Checking Q#${currentQuestionNumber}: Selected=${sortedSelected}, Correct=${sortedCorrect}, Result=${correct}`);
     setIsCorrect(correct);
     setShowAnswer(true); // Reveal feedback
-    // Progress is already saved via the useEffect watching currentSelections
-  }, [currentQuestion, currentQuestionNumber, currentSelections]);
+    // Progress is saved via the useEffect watching currentSelections/currentQuestionIndex
+  }, [currentQuestion, currentQuestionNumber, currentSelections, showAnswer]);
 
 
   // Navigation functions
   const goToNextQuestion = useCallback(() => {
     if (currentQuestionIndex < questions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
+      // Reset feedback state for the new question
+      // setShowAnswer(false);
+      // setIsCorrect(null);
     }
   }, [currentQuestionIndex, questions.length]);
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
       setCurrentQuestionIndex(prev => prev - 1);
+      // Reset feedback state for the new question
+      // setShowAnswer(false);
+      // setIsCorrect(null);
     }
   }, [currentQuestionIndex]);
 
@@ -145,21 +162,25 @@ export default function PracticePage() {
     if (index >= 0 && index < questions.length) {
       setCurrentQuestionIndex(index);
       setIsSheetOpen(false);
+       // Reset feedback state when jumping to a question
+       // setShowAnswer(false);
+       // setIsCorrect(null);
     }
   }, [questions.length]);
 
   const goToHome = useCallback(() => {
-    // Optionally prompt the user before clearing progress? For now, clear it.
-    // clearPracticeProgress(); // Consider if progress should *always* clear on home navigation
+    // Progress is saved automatically by context/localStorage effect
     router.push('/');
   }, [router]);
 
   const handleResetPractice = useCallback(() => {
-    clearPracticeProgress();
-    setCurrentQuestionIndex(0);
-    setCurrentSelections({});
-    setShowAnswer(false);
+    clearPracticeProgress(); // Clears context and localStorage
+    setCurrentQuestionIndex(0); // Go to the first question
+    setCurrentSelections({}); // Clear local selection state
+    setShowAnswer(false); // Reset feedback
     setIsCorrect(null);
+     // No need to manually reset state based on question 0, useEffect[currentQuestionIndex] will handle it
+     console.log("Practice reset.");
   }, [clearPracticeProgress]);
 
 
@@ -231,15 +252,15 @@ export default function PracticePage() {
       {/* Question Card */}
       <div className="w-full max-w-4xl">
         <QuestionCard
-          key={currentQuestionNumber}
+          key={currentQuestionNumber} // Ensure re-render on question change
           question={currentQuestion}
           selectedAnswers={currentSelectionForCard}
           onAnswerChange={(key, checked) => currentQuestionNumber && handleAnswerChange(currentQuestionNumber, key, checked)}
           questionIndex={currentQuestionIndex}
           totalQuestions={questions.length}
-          revealAnswers={showAnswer}
-          userAnswer={showAnswer ? currentSelectionForCard : undefined} // Only pass userAnswer when revealing
-          isDisabled={showAnswer}
+          revealAnswers={showAnswer} // Pass the state to control feedback visibility in card
+          userAnswer={showAnswer ? currentSelectionForCard : undefined} // Pass the selection when revealing
+          isDisabled={showAnswer} // Disable inputs when feedback is shown
         />
       </div>
 
@@ -277,7 +298,7 @@ export default function PracticePage() {
           {!showAnswer ? (
             <Button
               onClick={checkAnswer}
-              disabled={currentSelectionForCard.length === 0}
+              disabled={currentSelectionForCard.length === 0} // Disable if no answer selected
             >
               Check Answer
             </Button>
