@@ -61,6 +61,7 @@ export interface PracticeIncorrectQuestion extends IncorrectQuestionDetail {
 }
 
 export interface PracticeResult {
+    id?: string; // Added optional ID for history tracking
     score: number;
     totalQuestions: number;
     correctCount: number;

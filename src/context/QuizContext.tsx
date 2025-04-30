@@ -27,9 +27,14 @@ interface QuizContextProps {
   // Flag for initialization
   isInitialized: boolean;
 
-  // Temporary state for practice results
-  lastPracticeResult: PracticeResult | null;
-  setLastPracticeResult: Dispatch<SetStateAction<PracticeResult | null>>;
+  // Practice History
+  practiceHistory: PracticeResult[];
+  setPracticeHistory: Dispatch<SetStateAction<PracticeResult[]>>;
+  addPracticeResult: (result: PracticeResult) => void;
+
+  // Removed: Temporary state for practice results
+  // lastPracticeResult: PracticeResult | null;
+  // setLastPracticeResult: Dispatch<SetStateAction<PracticeResult | null>>;
 }
 
 const QuizContext = createContext<QuizContextProps | undefined>(undefined);
@@ -39,6 +44,7 @@ const PRACTICE_PROGRESS_KEY = 'quizMasterPracticeProgress';
 const EXAM_PROGRESS_KEY = 'quizMasterExamProgress';
 const ALL_QUESTIONS_KEY = 'quizMasterAllQuestions'; // Key for all questions
 const EXAM_HISTORY_KEY = 'quizMasterExamHistory'; // Key for exam history
+const PRACTICE_HISTORY_KEY = 'quizMasterPracticeHistory'; // Key for practice history
 
 // Helper to safely get item from localStorage
 const safelyGetLocalStorage = <T,>(key: string, defaultValue: T): T => {
@@ -71,6 +77,7 @@ const safelyGetLocalStorage = <T,>(key: string, defaultValue: T): T => {
                 return defaultValue;
             }
         }
+         // Add specific checks for history structures if needed
 
         return parsed !== null ? parsed : defaultValue; // Return parsed value or default
     } catch (error) {
@@ -126,11 +133,12 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   // Initial state set to defaults (empty/null) to avoid hydration mismatch
   const [questions, setQuestions] = useState<Question[]>([]);
   const [examHistory, setExamHistory] = useState<ExamRecord[]>([]);
+  const [practiceHistory, setPracticeHistory] = useState<PracticeResult[]>([]); // Added practice history state
   const [isLoading, setIsLoading] = useState<boolean>(true); // Assume loading initially
   const [practiceProgress, setPracticeProgress] = useState<PracticeProgress | null>(null);
   const [examProgress, setExamProgress] = useState<ExamProgress | null>(null);
   const [isInitialized, setIsInitialized] = useState(false); // Track client-side initialization
-  const [lastPracticeResult, setLastPracticeResult] = useState<PracticeResult | null>(null); // State for practice results
+  // Removed: const [lastPracticeResult, setLastPracticeResult] = useState<PracticeResult | null>(null);
 
   // Effect to load data from localStorage *only on the client*
   useEffect(() => {
@@ -138,6 +146,7 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
     if (!isInitialized) {
         setQuestions(safelyGetLocalStorage<Question[]>(ALL_QUESTIONS_KEY, []));
         setExamHistory(safelyGetLocalStorage<ExamRecord[]>(EXAM_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp));
+        setPracticeHistory(safelyGetLocalStorage<PracticeResult[]>(PRACTICE_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp)); // Load practice history
         setPracticeProgress(safelyGetLocalStorage<PracticeProgress | null>(PRACTICE_PROGRESS_KEY, null));
         setExamProgress(safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null));
         setIsLoading(false); // Finish loading after retrieving from storage
@@ -174,6 +183,13 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
     }
    }, [examHistory, isInitialized]);
 
+    // --- Effect for Persisting Practice History ---
+    useEffect(() => {
+    if (isInitialized) {
+        safelySetLocalStorage(PRACTICE_HISTORY_KEY, practiceHistory);
+    }
+   }, [practiceHistory, isInitialized]);
+
 
   // --- Functions to Clear Progress ---
    const clearPracticeProgress = useCallback(() => {
@@ -192,15 +208,29 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   // Function to add a new exam record
   const addExamRecord = useCallback((record: ExamRecord) => {
     setExamHistory(prev => {
+        // Assign ID if missing (though Firestore ID should be preferred)
+        const recordWithId = { ...record, id: record.id ?? `local-${Date.now()}-${Math.random()}` };
         // Avoid duplicates just in case
-        const exists = prev.some(r => r.id === record.id);
+        const exists = prev.some(r => r.id === recordWithId.id);
         if (exists) return prev;
-        const newState = [...prev, record].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
+        const newState = [...prev, recordWithId].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
         return newState;
     });
     // Clear exam progress after successfully saving/submitting
     clearExamProgress();
   }, [clearExamProgress]);
+
+   // Function to add a new practice result
+   const addPracticeResult = useCallback((result: PracticeResult) => {
+     setPracticeHistory(prev => {
+        // Generate a simple local ID for practice results
+        const resultWithId = { ...result, id: `practice-${Date.now()}-${Math.random()}` };
+        const newState = [resultWithId, ...prev].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
+        return newState;
+     });
+     // Clear practice progress after finishing
+     clearPracticeProgress();
+   }, [clearPracticeProgress]);
 
 
   return (
@@ -220,8 +250,11 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
         clearPracticeProgress,
         clearExamProgress,
         isInitialized, // Provide initialization status
-        lastPracticeResult,
-        setLastPracticeResult,
+        practiceHistory, // Provide practice history
+        setPracticeHistory, // Provide setter
+        addPracticeResult, // Provide add function
+        // Removed: lastPracticeResult,
+        // Removed: setLastPracticeResult,
       }}
     >
       {children}

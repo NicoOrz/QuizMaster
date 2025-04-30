@@ -1,14 +1,14 @@
 
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useEffect, useState, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation"; // Import useSearchParams
 import { useQuiz } from '@/context/QuizContext';
 import type { PracticeResult, PracticeIncorrectQuestion } from '@/types/quiz';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Check, X, Clock, Home, BookOpenText, Settings } from 'lucide-react';
+import { Check, X, Clock, Home, BookOpenText, Settings, ListChecks } from 'lucide-react'; // Added ListChecks
 import { QuestionCard } from '@/components/quiz/QuestionCard';
 import { Separator } from '@/components/ui/separator';
 import { format } from 'date-fns';
@@ -28,25 +28,34 @@ function formatDuration(seconds: number): string {
 
 
 export default function PracticeResultsPage() {
-  const { lastPracticeResult, setLastPracticeResult } = useQuiz();
+  const { practiceHistory } = useQuiz(); // Get history
   const router = useRouter();
-  const [isLoading, setIsLoading] = useState(!lastPracticeResult); // Start loading if no result initially
+  const searchParams = useSearchParams(); // Use hook to get search params
+  const resultId = searchParams.get('resultId'); // Get the ID from query
+
+  const [practiceResult, setPracticeResult] = useState<PracticeResult | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!lastPracticeResult) {
-        setError("No practice result found. Perhaps you refreshed the page?");
-        setIsLoading(false);
-        // Clear the context in case it's stale, though it should be null anyway
-        // setLastPracticeResult(null);
-    } else {
-        setIsLoading(false); // Result is available
+    if (!resultId) {
+      setError("No practice result ID provided.");
+      setIsLoading(false);
+      return;
     }
-     // Cleanup function to clear the result when navigating away or unmounting
-     return () => {
-        setLastPracticeResult(null);
-     };
-  }, [lastPracticeResult, setLastPracticeResult]);
+
+    // Find the result in the history
+    const foundResult = practiceHistory.find(result => result.id === resultId);
+
+    if (foundResult) {
+      setPracticeResult(foundResult);
+      setIsLoading(false);
+    } else {
+      setError(`Practice result with ID ${resultId} not found in history.`);
+      setIsLoading(false);
+    }
+    // No cleanup needed here as we're reading from context history
+  }, [resultId, practiceHistory]); // Depend on ID and history
 
    const goToHome = () => {
     router.push('/');
@@ -55,6 +64,11 @@ export default function PracticeResultsPage() {
    const startNewPractice = () => {
      router.push('/practice/config');
    }
+
+   const goToPracticeHistory = () => {
+    router.push('/history/practice'); // Navigate to new practice history page
+   };
+
 
    // Loading State
    if (isLoading) {
@@ -70,7 +84,7 @@ export default function PracticeResultsPage() {
    }
 
    // Error State or No Result Found
-   if (error || !lastPracticeResult) {
+   if (error || !practiceResult) {
        return (
           <div className="container mx-auto p-4 min-h-screen flex flex-col items-center justify-center text-center">
                <Button onClick={goToHome} variant="outline" className="absolute top-4 left-4">
@@ -81,14 +95,16 @@ export default function PracticeResultsPage() {
                </Button>
              <h1 className="text-2xl font-bold mb-4 text-destructive">Error Loading Results</h1>
              <p className="text-muted-foreground mb-6">{error || "Could not retrieve practice session results."}</p>
-             {/* Optional: Retry logic if it makes sense */}
+              <Button onClick={goToPracticeHistory} variant="outline">
+                 <ListChecks className="mr-2 h-4 w-4" /> View Practice History
+               </Button>
           </div>
        );
    }
 
   // --- Display Record ---
-  const incorrectQuestions = lastPracticeResult.incorrectQuestions || [];
-  const scoreColor = lastPracticeResult.score >= 70 ? 'text-green-600 dark:text-green-400' : lastPracticeResult.score >= 40 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400';
+  const incorrectQuestions = practiceResult.incorrectQuestions || [];
+  const scoreColor = practiceResult.score >= 70 ? 'text-green-600 dark:text-green-400' : practiceResult.score >= 40 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400';
 
   return (
     <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10">
@@ -103,30 +119,30 @@ export default function PracticeResultsPage() {
       <Card className="w-full max-w-3xl mb-8 shadow-lg rounded-lg">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Your Score</CardTitle>
-           {lastPracticeResult.range && (
+           {practiceResult.range && (
                 <CardDescription>
-                 (Practiced original questions: {lastPracticeResult.range.start} - {lastPracticeResult.range.end})
+                 (Practiced original questions: {practiceResult.range.start} - {practiceResult.range.end})
                 </CardDescription>
            )}
           <CardDescription>
-            Completed on: {format(new Date(lastPracticeResult.timestamp), 'PPP p')}
-             {lastPracticeResult.duration !== undefined && lastPracticeResult.duration > 0 && (
+            Completed on: {format(new Date(practiceResult.timestamp), 'PPP p')}
+             {practiceResult.duration !== undefined && practiceResult.duration > 0 && (
                <span className="flex items-center justify-center text-muted-foreground mt-1">
-                 <Clock className="mr-1 h-4 w-4" /> {formatDuration(lastPracticeResult.duration)}
+                 <Clock className="mr-1 h-4 w-4" /> {formatDuration(practiceResult.duration)}
                </span>
              )}
           </CardDescription>
         </CardHeader>
         <CardContent className="text-center">
-          <p className={`text-6xl font-bold ${scoreColor}`}>{lastPracticeResult.score.toFixed(1)}%</p>
+          <p className={`text-6xl font-bold ${scoreColor}`}>{practiceResult.score.toFixed(1)}%</p>
           <p className="text-lg text-muted-foreground mt-2">
-            {lastPracticeResult.correctCount} out of {lastPracticeResult.totalQuestions} questions correct
+            {practiceResult.correctCount} out of {practiceResult.totalQuestions} questions correct
           </p>
         </CardContent>
       </Card>
 
       {incorrectQuestions.length > 0 && (
-         <Card className="w-full max-w-4xl shadow-lg rounded-lg">
+         <Card className="w-full max-w-4xl shadow-lg rounded-lg mb-8"> {/* Added mb-8 */}
             <CardHeader>
               <CardTitle className="text-xl">Review Incorrect Questions</CardTitle>
                <CardDescription>Here are the questions you answered incorrectly during practice.</CardDescription>
@@ -177,8 +193,8 @@ export default function PracticeResultsPage() {
          </Card>
       )}
 
-       {incorrectQuestions.length === 0 && lastPracticeResult.totalQuestions > 0 && (
-        <Card className="w-full max-w-3xl shadow-lg rounded-lg bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-700 mt-8">
+       {incorrectQuestions.length === 0 && practiceResult.totalQuestions > 0 && (
+        <Card className="w-full max-w-3xl shadow-lg rounded-lg bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-700 mt-8 mb-8"> {/* Added mb-8 */}
           <CardContent className="p-6 text-center">
             <Check className="h-12 w-12 text-green-600 dark:text-green-400 mx-auto mb-4" />
             <p className="text-xl font-semibold text-green-700 dark:text-green-300">Excellent! You answered all practice questions correctly!</p>
@@ -186,13 +202,18 @@ export default function PracticeResultsPage() {
         </Card>
       )}
 
-       {lastPracticeResult.totalQuestions === 0 && (
-           <Card className="w-full max-w-3xl shadow-lg rounded-lg mt-8">
+       {practiceResult.totalQuestions === 0 && (
+           <Card className="w-full max-w-3xl shadow-lg rounded-lg mt-8 mb-8"> {/* Added mb-8 */}
                <CardContent className="p-6 text-center">
                     <p className="text-muted-foreground">This practice session contained no questions.</p>
                </CardContent>
            </Card>
        )}
+
+       {/* Button to view full practice history */}
+        <Button onClick={goToPracticeHistory} variant="outline" size="lg">
+           <ListChecks className="mr-2 h-4 w-4" /> View Practice History
+        </Button>
 
     </div>
   );

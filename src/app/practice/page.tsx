@@ -17,7 +17,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from '@/components/ui/skeleton';
 
 export default function PracticePage() {
-  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isInitialized: isContextInitialized, isLoading: isContextLoading, setLastPracticeResult } = useQuiz();
+  // Replaced setLastPracticeResult with addPracticeResult
+  const { practiceProgress, setPracticeProgress, clearPracticeProgress, isInitialized: isContextInitialized, isLoading: isContextLoading, addPracticeResult } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -68,18 +69,23 @@ export default function PracticePage() {
              setShouldRedirect(true);
         }
      } else {
-         setShouldRedirect(true);
+         // No valid progress, need to redirect
+         // Check if we are not already initialized/loading to avoid multiple redirects
+         if (!isContextLoading && isContextInitialized) {
+              setShouldRedirect(true);
+         }
      }
   }, [practiceProgress, isContextLoading, isContextInitialized, isComponentInitialized, toast, clearPracticeProgress]);
 
   // --- Redirect Effect ---
    useEffect(() => {
-    if (shouldRedirect) {
+    if (shouldRedirect && isComponentInitialized) { // Only redirect after component init check
         console.log("PracticePage: Triggering redirect to /practice/config");
-        const timer = setTimeout(() => router.replace('/practice/config'), 0);
-        return () => clearTimeout(timer);
+        // Use replace to avoid adding to history stack
+        router.replace('/practice/config');
+        // No need for timer, rely on React's update cycle
     }
-   }, [shouldRedirect, router]);
+   }, [shouldRedirect, router, isComponentInitialized]);
 
    // Effect to reset feedback when index changes *after* initialization
     useEffect(() => {
@@ -94,18 +100,21 @@ export default function PracticePage() {
   useEffect(() => {
     if (isComponentInitialized && isContextInitialized && practiceQuestions.length > 0) {
         setPracticeProgress(prev => {
-            if (!prev) return null;
+            // Ensure prev is not null before spreading
+             if (!prev) return prev;
 
             const newState: PracticeProgress = {
                 ...prev,
                 currentIndex: currentQuestionIndex,
                 selections: currentSelections,
-                questions: practiceQuestions,
+                questions: practiceQuestions, // Ensure questions are also saved if they could change (though unlikely here)
             };
 
+            // Compare relevant parts to avoid unnecessary updates
             if (prev.currentIndex !== newState.currentIndex ||
                 JSON.stringify(prev.selections) !== JSON.stringify(newState.selections) ||
-                JSON.stringify(prev.questions) !== JSON.stringify(newState.questions)) {
+                JSON.stringify(prev.questions) !== JSON.stringify(newState.questions)) { // Added question check for robustness
+                 // console.log("Saving practice progress:", newState);
                  return newState;
              }
             return prev; // No change
@@ -262,6 +271,8 @@ export default function PracticePage() {
         const duration = practiceStartTime ? Math.round((practiceEndTime - practiceStartTime) / 1000) : undefined;
 
         const result: PracticeResult = {
+            // Generate a temporary ID here, context will add the final one
+            id: `temp-${practiceEndTime}`,
             score: parseFloat(score.toFixed(2)),
             totalQuestions: practiceQuestions.length,
             correctCount: correctCount,
@@ -271,22 +282,20 @@ export default function PracticePage() {
             range: practiceProgress.range, // Include the range practiced
         };
 
-        setLastPracticeResult(result); // Store result in context
-        clearPracticeProgress(); // Clear the practice progress
+        addPracticeResult(result); // Store result in context history & clear progress
         toast({ title: "Practice Finished!", description: "Showing your results." });
-        router.push('/practice/results'); // Navigate to results page
 
-   }, [practiceQuestions, currentSelections, practiceProgress, practiceStartTime, setLastPracticeResult, clearPracticeProgress, router, toast]);
+        // Find the newly added result in the updated history to get its real ID
+        // Note: This relies on addPracticeResult updating the history synchronously
+        // or having a slight delay before navigating. Let's assume sync for now.
+        // A better approach might be for addPracticeResult to return the added result with ID.
+        // For now, let's just navigate to the general results page.
+        router.push(`/practice/results?resultId=${result.id}`); // Use the temporary ID for navigation
+
+   }, [practiceQuestions, currentSelections, practiceProgress, practiceStartTime, addPracticeResult, router, toast]);
 
 
   // --- Render Logic ---
-  if (shouldRedirect) {
-      return (
-          <div className="container mx-auto p-4 min-h-screen flex items-center justify-center">
-              Redirecting...
-          </div>
-      );
-  }
   if (isContextLoading || !isContextInitialized || !isComponentInitialized) {
      return (
          <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 space-y-6">
@@ -306,12 +315,17 @@ export default function PracticePage() {
      );
   }
 
-  if (!currentQuestion) {
-        // This case should be handled by the redirect logic if initialization fails properly
-        console.error("PracticePage Render: Current question is undefined after initialization checks. State is inconsistent.");
-        // Avoid rendering broken UI, show a generic error message or rely on redirect
-        return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
+   if (shouldRedirect) { // Render loading/redirecting state if redirect is pending
+       return <div className="container mx-auto p-4 text-center">Redirecting...</div>;
    }
+
+
+  if (!currentQuestion) {
+      // This case should ideally be covered by the redirect logic now.
+      // If it still occurs, log an error but avoid rendering potentially broken UI.
+      console.error("Current question is undefined after initialization. Practice state might be inconsistent.");
+      return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
+  }
 
   // Get the potentially empty selection for the *current* question number
   const currentSelectionForCard = currentSelections[currentQuestionNumber] || [];
@@ -450,8 +464,10 @@ export default function PracticePage() {
 
              {/* Empty div to balance the flex layout when middle button is present */}
              {/* This ensures Prev/Next stay at the edges */}
-             {showAnswer && !isLastQuestion && <div></div>}
-             {!showAnswer && <div></div>}
+             {/* {showAnswer && !isLastQuestion && <div></div>} */}
+             {/* {!showAnswer && <div></div>} */}
+             {/* Simplified: Let justify-between handle spacing */}
+
 
             {/* Conditionally render the "Next" button on the right only if needed and not last */}
             {/* This button is now part of the middle logic */}
