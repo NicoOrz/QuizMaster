@@ -27,9 +27,9 @@ export default function PracticePage() {
 
   // Load saved selection or reset when question index changes
   useEffect(() => {
-    console.log(`Effect running for index: ${currentQuestionIndex}`);
+    // console.log(`Effect running for index: ${currentQuestionIndex}`);
     if (questions.length === 0 && currentQuestionIndex === 0) {
-      console.log("No questions loaded, redirecting home.");
+      // console.log("No questions loaded, redirecting home.");
       router.push('/');
       return;
     }
@@ -37,17 +37,34 @@ export default function PracticePage() {
     const question = questions[currentQuestionIndex];
     if (question) {
         const questionNum = question.question_number;
-        console.log(`Setting up question number: ${questionNum}`);
+        // console.log(`Setting up question number: ${questionNum}`);
         setShowAnswer(false);
         setIsCorrect(null);
-        const savedSelection = practiceSelections[questionNum] || [];
-        setCurrentSelection(savedSelection);
-        console.log(`Loaded selection for question ${questionNum}:`, savedSelection);
+        // Check if this question was already answered in this session
+        const savedSelection = practiceSelections[questionNum];
+        if (savedSelection) {
+             // If previously answered, show the answer and correctness immediately
+             setCurrentSelection(savedSelection);
+             const correctAnswers = question.correct_answer;
+             const sortedSelected = [...savedSelection].sort();
+             const sortedCorrect = [...correctAnswers].sort();
+             const correct = sortedSelected.length === sortedCorrect.length &&
+                             sortedSelected.every((value, index) => value === sortedCorrect[index]);
+             setIsCorrect(correct);
+             setShowAnswer(true);
+             // console.log(`Restored state for answered Q#${questionNum}: Correct=${correct}, ShowAnswer=true, Selection=`, savedSelection);
+        } else {
+             // If not previously answered, reset selection
+             setCurrentSelection([]);
+             // console.log(`Loaded fresh state for unanswered Q#${questionNum}`);
+        }
     } else {
-        console.log(`Question at index ${currentQuestionIndex} not found.`);
+        // console.log(`Question at index ${currentQuestionIndex} not found.`);
         // Handle case where index might be out of bounds briefly during navigation
     }
-  }, [currentQuestionIndex, questions, practiceSelections, router]);
+    // Dependency on practiceSelections removed to avoid loop when navigating back to an answered q
+    // We only want to load the saved state when the *index* changes.
+  }, [currentQuestionIndex, questions, router]);
 
 
   const handleAnswerChange = (questionNumber: number, answerKey: string, checked: boolean) => {
@@ -56,7 +73,7 @@ export default function PracticePage() {
       console.log("Answer shown, blocking change.");
       return;
     }
-     console.log(`Answer change for Q#${questionNumber}: Key=${answerKey}, Checked=${checked}`);
+    // console.log(`Answer change for Q#${questionNumber}: Key=${answerKey}, Checked=${checked}`);
 
     setCurrentSelection(prev => {
       const question = questions.find(q => q.question_number === questionNumber);
@@ -73,71 +90,75 @@ export default function PracticePage() {
         // Single choice (RadioGroup)
         newSelection = [answerKey];
       }
-       console.log("New current selection:", newSelection);
+      // console.log("New current selection:", newSelection);
       return newSelection;
     });
   };
 
   const checkAnswer = () => {
-    if (!currentQuestion) {
-        console.error("Cannot check answer: currentQuestion is null");
-        return;
-    }
-     console.log("Checking answer for question:", currentQuestion.question_number);
-     console.log("User's current selection:", currentSelection);
+     console.log("Check Answer button clicked!"); // Log button click
+     if (!currentQuestion) {
+         console.error("Cannot check answer: currentQuestion is null");
+         return;
+     }
+     console.log(`Checking answer for Q#${currentQuestion.question_number} with selection:`, currentSelection);
 
 
-    const correctAnswers = currentQuestion.correct_answer;
-    // Sort both arrays for comparison
-    const sortedSelected = [...currentSelection].sort();
-    const sortedCorrect = [...correctAnswers].sort();
+     const correctAnswers = currentQuestion.correct_answer;
+     // Sort both arrays for comparison
+     const sortedSelected = [...currentSelection].sort();
+     const sortedCorrect = [...correctAnswers].sort();
 
-    const correct = sortedSelected.length === sortedCorrect.length &&
-                    sortedSelected.every((value, index) => value === sortedCorrect[index]);
+     const correct = sortedSelected.length === sortedCorrect.length &&
+                     sortedSelected.every((value, index) => value === sortedCorrect[index]);
 
-     console.log("Correct answers:", sortedCorrect);
-     console.log("Is correct?", correct);
+     console.log("Correct answers array:", sortedCorrect);
+     console.log("Calculated isCorrect:", correct); // Log calculation result
 
-    setIsCorrect(correct);
-    setShowAnswer(true); // This should trigger the display of feedback
+     // Set state based on the check
+     setIsCorrect(correct);
+     setShowAnswer(true); // Reveal feedback and switch button
 
-    // Save the selection made for this question
-    setPracticeSelections(prev => {
-        const updatedSelections = {
-            ...prev,
-            [currentQuestionNumber]: currentSelection
-        };
-         console.log("Updated practice selections:", updatedSelections);
-        return updatedSelections;
-    });
+     // Save the selection made for this question *after* checking
+     // Use a functional update for practiceSelections
+     setPracticeSelections(prev => {
+         const updatedSelections = {
+             ...prev,
+             [currentQuestionNumber]: currentSelection // Save the selection that was checked
+         };
+         console.log("Updated practice selections state:", updatedSelections);
+         return updatedSelections;
+     });
 
-     console.log("State after checkAnswer: isCorrect =", correct, "showAnswer =", true);
-  };
+     console.log(`State update triggered: isCorrect=${correct}, showAnswer=true`); // Confirm state update is called
+   };
+
 
   const goToNextQuestion = () => {
     if (currentQuestionIndex < questions.length - 1) {
-        console.log("Going to next question");
+        // console.log("Going to next question");
       setCurrentQuestionIndex(prev => prev + 1);
     } else {
-        console.log("Already at the last question");
+        // console.log("Already at the last question");
     }
   };
 
   const goToPreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
-        console.log("Going to previous question");
+        // console.log("Going to previous question");
       setCurrentQuestionIndex(prev => prev - 1);
     } else {
-        console.log("Already at the first question");
+        // console.log("Already at the first question");
     }
   };
 
    const goToHome = () => {
-       console.log("Going back home");
+       // console.log("Going back home");
     router.push('/');
    };
 
-   console.log(`Rendering PracticePage - Index: ${currentQuestionIndex}, ShowAnswer: ${showAnswer}, IsCorrect: ${isCorrect}`);
+   // Log state right before rendering
+   // console.log(`Rendering PracticePage - Index: ${currentQuestionIndex}, ShowAnswer: ${showAnswer}, IsCorrect: ${isCorrect}, CurrentSelection Length: ${currentSelection.length}, Button Disabled: ${currentSelection.length === 0 || showAnswer}`);
 
 
   if (questions.length === 0 || !currentQuestion) {
@@ -198,7 +219,10 @@ export default function PracticePage() {
           </Button>
 
            {!showAnswer ? (
-             <Button onClick={checkAnswer} disabled={currentSelection.length === 0}>
+             <Button
+                onClick={checkAnswer}
+                disabled={currentSelection.length === 0} // Disable only if nothing is selected
+             >
                 Check Answer
              </Button>
             ) : (
