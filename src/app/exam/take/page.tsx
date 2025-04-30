@@ -272,20 +272,20 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
   }, [examQuestions.length]);
 
   const handleSubmitExam = useCallback(async () => {
-     console.log("ExamTakePage: handleSubmitExam called.");
+     console.log("ExamTakePage: [handleSubmitExam] Called.");
      if (isSubmitting || !isLocallyInitialized || examQuestions.length === 0) {
-         console.warn("ExamTakePage: Submission prevented. Conditions:", { isSubmitting, isLocallyInitialized, hasQuestions: examQuestions.length > 0 });
+         console.warn("ExamTakePage: [handleSubmitExam] Submission prevented. Conditions:", { isSubmitting, isLocallyInitialized, hasQuestions: examQuestions.length > 0 });
          return;
      }
      setIsSubmitting(true);
      toast({ title: "Submitting Exam...", description: "Calculating your results." });
-     console.log("ExamTakePage: Starting submission process...");
+     console.log("ExamTakePage: [handleSubmitExam] Starting submission process...");
 
      try {
          let correctCount = 0;
          const incorrectQuestionsDetail = [];
 
-         console.log("ExamTakePage: Calculating score...");
+         console.log("ExamTakePage: [handleSubmitExam] Calculating score...");
          for (const question of examQuestions) {
            const userAnswer = userAnswers[question.question_number];
            const selected = userAnswer?.selected_answers || [];
@@ -308,12 +308,13 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
              });
            }
          }
+         console.log(`ExamTakePage: [handleSubmitExam] Correct count: ${correctCount}`);
 
          const score = examQuestions.length > 0 ? (correctCount / examQuestions.length) * 100 : 0;
          const examEndTime = Date.now();
          // Ensure examStartTime is valid before calculating duration
          const duration = examStartTime && examStartTime > 0 ? Math.round((examEndTime - examStartTime) / 1000) : 0; // Duration in seconds
-         console.log(`ExamTakePage: Score calculated: ${score.toFixed(2)}%, Duration: ${duration}s`);
+         console.log(`ExamTakePage: [handleSubmitExam] Score calculated: ${score.toFixed(2)}%, Duration: ${duration}s`);
 
          const recordData = {
            userId: 'anonymous', // TODO: Replace with actual user ID if authentication is added
@@ -325,10 +326,10 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
            // timestamp is handled by Firestore or context.addExamRecord
          };
 
-         console.log("ExamTakePage: Prepared record data:", recordData);
-         console.log("ExamTakePage: Saving exam record to Firestore...");
+         console.log("ExamTakePage: [handleSubmitExam] Prepared record data:", recordData);
+         console.log("ExamTakePage: [handleSubmitExam] Saving exam record to Firestore...");
          const docId = await saveExamRecord(recordData);
-         console.log(`ExamTakePage: Firestore save successful. Document ID: ${docId}`);
+         console.log(`ExamTakePage: [handleSubmitExam] Firestore save successful. Document ID: ${docId}`);
 
          const finalTimestamp = Date.now(); // Use final submission time for local record consistency
          const fullRecord: ExamRecord = {
@@ -336,17 +337,22 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
            id: docId,
            timestamp: finalTimestamp,
          };
-         console.log("ExamTakePage: Adding exam record to context history:", fullRecord);
+         console.log("ExamTakePage: [handleSubmitExam] Adding exam record to context history:", fullRecord);
          addExamRecord(fullRecord); // This should also clear examProgress via context
-         console.log("ExamTakePage: Context updated.");
+         console.log("ExamTakePage: [handleSubmitExam] Context updated.");
 
          toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
-         console.log("ExamTakePage: Navigating to results page...");
+         console.log("ExamTakePage: [handleSubmitExam] Navigating to results page...");
          router.push(`/exam/results?recordId=${docId}`);
 
      } catch (error) {
-         console.error("ExamTakePage: Failed to save exam record during submission:", error);
-         toast({ title: "Submission Failed", description: "Could not save exam results. Please try again.", variant: "destructive" });
+         console.error("ExamTakePage: [handleSubmitExam] Failed to save exam record during submission:", error);
+         if (error instanceof Error) {
+             console.error("ExamTakePage: [handleSubmitExam] Error details:", error.message, error.stack);
+             toast({ title: "Submission Failed", description: `Could not save exam results: ${error.message}`, variant: "destructive", duration: 10000 });
+         } else {
+             toast({ title: "Submission Failed", description: "An unknown error occurred while saving exam results.", variant: "destructive", duration: 10000 });
+         }
          setIsSubmitting(false); // Allow retry on failure
      }
      // Note: No finally block needed to set isSubmitting false, success navigates away. If it fails, catch block handles it.
