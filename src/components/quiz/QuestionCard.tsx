@@ -59,7 +59,7 @@ export function QuestionCard({
             />
           </div>
         )}
-        <CardDescription className="text-foreground pt-2">{question.question_text}</CardDescription>
+        <CardDescription className="text-foreground pt-2 whitespace-pre-wrap">{question.question_text}</CardDescription>
       </CardHeader>
       <CardContent>
         {isMultipleChoice ? (
