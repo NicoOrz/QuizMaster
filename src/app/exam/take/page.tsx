@@ -13,23 +13,14 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { QuizOverview } from '@/components/quiz/QuizOverview';
 import { saveExamRecord } from '@/services/firestoreService';
 import { useToast } from "@/hooks/use-toast";
+import { shuffleArray } from '@/lib/utils'; // Make sure shuffleArray is imported
 
-// Helper function to shuffle an array
-function shuffleArray<T>(array: T[]): T[] {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
-
-export default function ExamTakePage({searchParams}: {searchParams: Record<string, string>}) {
+export default function ExamTakePage({searchParams}: {searchParams: { numQuestions?: string }}) { // Added type for searchParams
   const { questions: allQuestions, addExamRecord, examProgress, setExamProgress, clearExamProgress } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
-  const requestedNumQuestionsParam = searchParams.get('numQuestions');
-  
+  const requestedNumQuestionsParam = searchParams?.numQuestions; // Use optional chaining
+
   // --- State Initialization ---
   // Attempt to load from context first, then generate new if needed
   const [examQuestions, setExamQuestions] = useState<Question[]>(examProgress?.questions ?? []);
@@ -47,7 +38,7 @@ export default function ExamTakePage({searchParams}: {searchParams: Record<strin
     // If not loaded from existing progress and have questions, initialize a new exam
     if (!isInitialized && allQuestions.length > 0) {
         const requestedNum = parseInt(requestedNumQuestionsParam || '10', 10);
-        if (requestedNum <= 0) {
+        if (isNaN(requestedNum) || requestedNum <= 0) { // Check for NaN as well
             toast({ title: "Exam Configuration Error", description: "Invalid number of questions requested. Redirecting.", variant: "destructive" });
             router.push('/exam/config');
             return;
@@ -141,13 +132,13 @@ export default function ExamTakePage({searchParams}: {searchParams: Record<strin
 
   const goToNextQuestion = useCallback(() => {
     if (currentQuestionIndex < examQuestions.length - 1) {
-      setCurrentQuestionIndex(prev => prev + 1);
+      setCurrentQuestionIndex(prev => prev + 1); // Functional update is safe
     }
-  }, [currentQuestionIndex, examQuestions.length]);
+  }, [currentQuestionIndex, examQuestions.length]); // Dependencies are correct
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev - 1);
+      setCurrentQuestionIndex(prev => prev - 1); // Functional update is safe
     }
   }, [currentQuestionIndex]);
 
@@ -233,7 +224,10 @@ export default function ExamTakePage({searchParams}: {searchParams: Record<strin
 
   const currentQuestion = examQuestions[currentQuestionIndex];
   if (!currentQuestion) {
-    return <div className="container mx-auto p-4 text-center">Loading question...</div>;
+    // This might happen if index is out of bounds briefly during initialization or state mismatch
+    console.warn(`Current question not found at index ${currentQuestionIndex}. Total questions: ${examQuestions.length}.`);
+    // Optional: Redirect or show a more specific loading/error state
+    return <div className="container mx-auto p-4 text-center">Loading question data...</div>;
   }
 
   const currentQuestionNumber = currentQuestion.question_number;
