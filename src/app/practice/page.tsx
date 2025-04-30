@@ -1,4 +1,5 @@
 
+
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -28,6 +29,7 @@ export default function PracticePage() {
 
   useEffect(() => {
     if (questions.length === 0 && currentQuestionIndex === 0) {
+      // Redirect immediately if no questions are loaded
       router.push('/');
       return;
     }
@@ -39,6 +41,7 @@ export default function PracticePage() {
         setIsCorrect(null);
         const savedSelection = practiceSelections[questionNum];
         if (savedSelection) {
+             // If navigating back to an answered question, show its previous state
              setCurrentSelection(savedSelection);
              const correctAnswers = question.correct_answer;
              const sortedSelected = [...savedSelection].sort();
@@ -46,40 +49,52 @@ export default function PracticePage() {
              const correct = sortedSelected.length === sortedCorrect.length &&
                              sortedSelected.every((value, index) => value === sortedCorrect[index]);
              setIsCorrect(correct);
-             setShowAnswer(true);
+             setShowAnswer(true); // Show the feedback immediately
         } else {
+            // Reset for a new, unanswered question
              setCurrentSelection([]);
         }
+    } else if (questions.length > 0 && currentQuestionIndex >= questions.length) {
+        // Handle edge case where index might be out of bounds after question changes
+        setCurrentQuestionIndex(questions.length - 1);
+    } else if (questions.length === 0) {
+        // If questions become empty (e.g., context cleared), redirect
+        router.push('/');
     }
   }, [currentQuestionIndex, questions, router, practiceSelections]); // Added practiceSelections dependency
 
 
-  const handleAnswerChange = (questionNumber: number, answerKey: string, checked: boolean) => {
+  const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
+    // Only allow changes if the answer hasn't been revealed yet
     if (showAnswer) {
       return;
     }
 
     setCurrentSelection(prev => {
       const question = questions.find(q => q.question_number === questionNumber);
-      const isMultipleChoice = question && question.correct_answer.length > 1;
+      if (!question) return prev; // Should not happen, but safeguard
+
+      const isMultipleChoice = question.correct_answer.length > 1;
 
       let newSelection: string[];
       if (isMultipleChoice) {
+        // For checkboxes, add or remove the selected key
         if (checked) {
           newSelection = [...prev, answerKey];
         } else {
           newSelection = prev.filter(ans => ans !== answerKey);
         }
       } else {
+        // For radio buttons, replace the selection with the new key
         newSelection = [answerKey];
       }
       return newSelection;
     });
-  };
+  }, [showAnswer, questions]); // Include questions in dependency if needed
 
-  const checkAnswer = () => {
-     if (!currentQuestion) {
-         console.error("Cannot check answer: currentQuestion is null");
+  const checkAnswer = useCallback(() => {
+     if (!currentQuestion || currentSelection.length === 0) {
+         // Don't check if no question or no selection made
          return;
      }
 
@@ -91,41 +106,53 @@ export default function PracticePage() {
                      sortedSelected.every((value, index) => value === sortedCorrect[index]);
 
      setIsCorrect(correct);
-     setShowAnswer(true); // Reveal feedback and switch button
+     setShowAnswer(true); // Reveal feedback and switch button state
 
      // Save the selection made for this question *after* checking
+     // This ensures the state reflects what was actually evaluated
      setPracticeSelections(prev => ({
          ...prev,
-         [currentQuestionNumber]: currentSelection // Save the selection that was checked
+         [currentQuestionNumber]: currentSelection
      }));
-   };
+   }, [currentQuestion, currentSelection, currentQuestionNumber]);
 
 
-  const goToNextQuestion = () => {
+  const goToNextQuestion = useCallback(() => {
     if (currentQuestionIndex < questions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
+      // Reset state handled by useEffect
     }
-  };
+  }, [currentQuestionIndex, questions.length]);
 
-  const goToPreviousQuestion = () => {
+  const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
       setCurrentQuestionIndex(prev => prev - 1);
+       // Reset state handled by useEffect
     }
-  };
+  }, [currentQuestionIndex]);
 
-   const goToHome = () => {
+   const goToHome = useCallback(() => {
     router.push('/');
-   };
+   }, [router]);
 
-   const navigateToQuestion = (index: number) => {
+   const navigateToQuestion = useCallback((index: number) => {
      if (index >= 0 && index < questions.length) {
          setCurrentQuestionIndex(index);
          setIsSheetOpen(false); // Close sheet after navigation
+         // Reset state handled by useEffect
      }
-   }
+   }, [questions.length]);
 
-  if (questions.length === 0 || !currentQuestion) {
-    return <div className="container mx-auto p-4 text-center">Loading questions or redirecting...</div>;
+  // Conditional rendering if no questions or question data is missing
+  if (questions.length === 0) {
+    return <div className="container mx-auto p-4 text-center">Loading questions or no questions imported. Redirecting...</div>;
+  }
+  if (!currentQuestion) {
+      // This might happen briefly during state transitions or if index is invalid
+       console.error(`Current question at index ${currentQuestionIndex} is undefined.`);
+      // Optionally, try to reset or show an error state
+      // setCurrentQuestionIndex(0); // Example reset
+      return <div className="container mx-auto p-4 text-center">Error loading question data.</div>;
   }
 
 
@@ -148,7 +175,7 @@ export default function PracticePage() {
                 </SheetHeader>
                 <QuizOverview
                     questions={questions}
-                    userAnswers={practiceSelections} // Pass the saved selections
+                    userAnswers={practiceSelections} // Pass the saved selections keyed by question_number
                     currentQuestionIndex={currentQuestionIndex}
                     navigateToQuestion={navigateToQuestion}
                     mode="practice"
@@ -159,29 +186,32 @@ export default function PracticePage() {
 
       <h1 className="text-3xl font-bold mb-8 mt-12">Practice Mode</h1>
 
-      <QuestionCard
-          key={currentQuestionNumber} // Add key to force re-render on question change
-          question={currentQuestion}
-          selectedAnswers={currentSelection}
-          onAnswerChange={(answerKey, checked) => handleAnswerChange(currentQuestionNumber, answerKey, checked)}
-          questionIndex={currentQuestionIndex}
-          totalQuestions={questions.length}
-          revealAnswers={showAnswer}
-          userAnswer={currentSelection}
-          isDisabled={showAnswer}
-      />
+      {/* Adjust max-width to accommodate the new QuestionCard layout */}
+      <div className="w-full max-w-4xl">
+        <QuestionCard
+            key={currentQuestionNumber} // Key ensures re-render when question changes
+            question={currentQuestion}
+            selectedAnswers={currentSelection}
+            onAnswerChange={(key, checked) => handleAnswerChange(currentQuestionNumber, key, checked)}
+            questionIndex={currentQuestionIndex}
+            totalQuestions={questions.length}
+            revealAnswers={showAnswer}
+            userAnswer={practiceSelections[currentQuestionNumber]} // Pass the saved answer for review styling
+            isDisabled={showAnswer} // Disable inputs after checking
+        />
+      </div>
 
       {/* Feedback Section */}
       {showAnswer && (
-        <Card className="w-full max-w-2xl mx-auto mt-4 shadow-md rounded-lg border border-border">
+        <Card className="w-full max-w-4xl mx-auto mt-4 shadow-md rounded-lg border border-border">
             <CardContent className="p-4 space-y-3">
-                 <div className={`flex items-center ${isCorrect ? 'text-green-600' : 'text-red-600'}`}>
+                 <div className={`flex items-center ${isCorrect ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                     {isCorrect ? <Check className="mr-2 h-5 w-5" /> : <X className="mr-2 h-5 w-5" />}
                     <span className="font-semibold">{isCorrect ? 'Correct!' : 'Incorrect'}</span>
                  </div>
                  {!isCorrect && (
                      <p className="text-sm font-medium">
-                        Correct Answer(s): <span className="text-green-600">{currentQuestion.correct_answer.join(', ')}</span>
+                        Correct Answer(s): <span className="text-green-600 dark:text-green-400">{currentQuestion.correct_answer.join(', ')}</span>
                      </p>
                  )}
                   <Separator className="my-3" />
@@ -196,7 +226,7 @@ export default function PracticePage() {
       )}
 
       {/* Navigation Section */}
-      <Card className="w-full max-w-2xl mx-auto mt-6 shadow-md rounded-lg">
+      <Card className="w-full max-w-4xl mx-auto mt-6 shadow-md rounded-lg">
         <CardContent className="flex justify-between p-4 items-center">
           <Button onClick={goToPreviousQuestion} disabled={currentQuestionIndex === 0} variant="outline">
             <ArrowLeft className="mr-2 h-4 w-4" /> Previous
@@ -205,7 +235,7 @@ export default function PracticePage() {
            {!showAnswer ? (
              <Button
                 onClick={checkAnswer}
-                disabled={currentSelection.length === 0}
+                disabled={currentSelection.length === 0} // Disable if no answer is selected
              >
                 Check Answer
              </Button>
