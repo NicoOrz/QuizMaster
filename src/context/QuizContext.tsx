@@ -23,6 +23,9 @@ interface QuizContextProps {
   // Functions to clear progress
   clearPracticeProgress: () => void;
   clearExamProgress: () => void;
+
+  // Flag for initialization
+  isInitialized: boolean;
 }
 
 const QuizContext = createContext<QuizContextProps | undefined>(undefined);
@@ -41,7 +44,7 @@ const safelyGetLocalStorage = <T,>(key: string, defaultValue: T): T => {
     try {
         const item = window.localStorage.getItem(key);
         // Ensure we don't parse "undefined" or "null" strings incorrectly
-        if (item === null || item === 'undefined') {
+        if (item === null || item === 'undefined' || item === '') {
              return defaultValue;
         }
         // Add basic check for empty progress objects that might have been saved incorrectly
@@ -95,57 +98,63 @@ const safelySetLocalStorage = (key: string, value: any) => {
 
 
 export const QuizProvider = ({ children }: { children: ReactNode }) => {
-  // Load questions from localStorage on initial mount
-  const [questions, setQuestions] = useState<Question[]>(() =>
-    safelyGetLocalStorage<Question[]>(ALL_QUESTIONS_KEY, [])
-  );
-  const [examHistory, setExamHistory] = useState<ExamRecord[]>(() =>
-     safelyGetLocalStorage<ExamRecord[]>(EXAM_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp)
-  );
-  const [isLoading, setIsLoading] = useState<boolean>(false); // Initially not loading
+  // Initial state set to defaults (empty/null) to avoid hydration mismatch
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [examHistory, setExamHistory] = useState<ExamRecord[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true); // Assume loading initially
+  const [practiceProgress, setPracticeProgress] = useState<PracticeProgress | null>(null);
+  const [examProgress, setExamProgress] = useState<ExamProgress | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false); // Track client-side initialization
 
-  // --- Progress State ---
-  const [practiceProgress, setPracticeProgress] = useState<PracticeProgress | null>(
-    () => safelyGetLocalStorage<PracticeProgress | null>(PRACTICE_PROGRESS_KEY, null)
-  );
-  const [examProgress, setExamProgress] = useState<ExamProgress | null>(
-    () => safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null)
-  );
+  // Effect to load data from localStorage *only on the client*
+  useEffect(() => {
+    setQuestions(safelyGetLocalStorage<Question[]>(ALL_QUESTIONS_KEY, []));
+    setExamHistory(safelyGetLocalStorage<ExamRecord[]>(EXAM_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp));
+    setPracticeProgress(safelyGetLocalStorage<PracticeProgress | null>(PRACTICE_PROGRESS_KEY, null));
+    setExamProgress(safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null));
+    setIsLoading(false); // Finish loading after retrieving from storage
+    setIsInitialized(true); // Mark initialization complete
+  }, []); // Empty dependency array ensures this runs only once on mount
 
    // --- Effect to Persist All Questions ---
    useEffect(() => {
-     safelySetLocalStorage(ALL_QUESTIONS_KEY, questions);
-   }, [questions]);
+     // Only save after initial client-side load is complete
+     if (isInitialized) {
+        safelySetLocalStorage(ALL_QUESTIONS_KEY, questions);
+     }
+   }, [questions, isInitialized]);
 
   // --- Effects for Persisting Progress ---
   useEffect(() => {
-    safelySetLocalStorage(PRACTICE_PROGRESS_KEY, practiceProgress);
-  }, [practiceProgress]);
+    if (isInitialized) {
+        safelySetLocalStorage(PRACTICE_PROGRESS_KEY, practiceProgress);
+    }
+  }, [practiceProgress, isInitialized]);
 
   useEffect(() => {
-     safelySetLocalStorage(EXAM_PROGRESS_KEY, examProgress);
-  }, [examProgress]);
+    if (isInitialized) {
+        safelySetLocalStorage(EXAM_PROGRESS_KEY, examProgress);
+    }
+  }, [examProgress, isInitialized]);
 
    // --- Effect for Persisting Exam History ---
     useEffect(() => {
-     safelySetLocalStorage(EXAM_HISTORY_KEY, examHistory);
-   }, [examHistory]);
+    if (isInitialized) {
+        safelySetLocalStorage(EXAM_HISTORY_KEY, examHistory);
+    }
+   }, [examHistory, isInitialized]);
 
 
   // --- Functions to Clear Progress ---
    const clearPracticeProgress = useCallback(() => {
     setPracticeProgress(null); // Set state to null
-    if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(PRACTICE_PROGRESS_KEY); // Remove from localStorage
-    }
+    // localStorage removal is handled by the useEffect for practiceProgress
     console.log("Practice progress cleared.");
   }, []);
 
   const clearExamProgress = useCallback(() => {
     setExamProgress(null); // Set state to null
-     if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(EXAM_PROGRESS_KEY); // Remove from localStorage
-    }
+    // localStorage removal is handled by the useEffect for examProgress
     console.log("Exam progress cleared.");
   }, []);
 
@@ -180,6 +189,7 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
         setExamProgress,
         clearPracticeProgress,
         clearExamProgress,
+        isInitialized, // Provide initialization status
       }}
     >
       {children}
