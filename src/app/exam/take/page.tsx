@@ -272,70 +272,84 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
   }, [examQuestions.length]);
 
   const handleSubmitExam = useCallback(async () => {
-    if (isSubmitting || !isLocallyInitialized || examQuestions.length === 0) return; // Add checks
-    setIsSubmitting(true);
-    toast({ title: "Submitting Exam...", description: "Calculating your results." });
+     console.log("ExamTakePage: handleSubmitExam called.");
+     if (isSubmitting || !isLocallyInitialized || examQuestions.length === 0) {
+         console.warn("ExamTakePage: Submission prevented. Conditions:", { isSubmitting, isLocallyInitialized, hasQuestions: examQuestions.length > 0 });
+         return;
+     }
+     setIsSubmitting(true);
+     toast({ title: "Submitting Exam...", description: "Calculating your results." });
+     console.log("ExamTakePage: Starting submission process...");
 
-    let correctCount = 0;
-    const incorrectQuestionsDetail = [];
+     try {
+         let correctCount = 0;
+         const incorrectQuestionsDetail = [];
 
-    for (const question of examQuestions) {
-      const userAnswer = userAnswers[question.question_number];
-      const selected = userAnswer?.selected_answers || [];
-      const correct = [...question.correct_answer].sort();
-      const sortedSelected = [...selected].sort();
-      const isCorrect = sortedSelected.length === correct.length &&
-                        sortedSelected.every((value, index) => value === correct[index]);
+         console.log("ExamTakePage: Calculating score...");
+         for (const question of examQuestions) {
+           const userAnswer = userAnswers[question.question_number];
+           const selected = userAnswer?.selected_answers || [];
+           const correct = [...question.correct_answer].sort();
+           const sortedSelected = [...selected].sort();
+           const isCorrect = sortedSelected.length === correct.length &&
+                             sortedSelected.every((value, index) => value === correct[index]);
 
-      if (isCorrect) {
-        correctCount++;
-      } else {
-        incorrectQuestionsDetail.push({
-          question_number: question.question_number,
-          question_text: question.question_text,
-          options: question.options,
-          user_answer: sortedSelected,
-          correct_answer: correct,
-          explanation: question.explanation,
-          image_url: question.image_url,
-        });
-      }
-    }
+           if (isCorrect) {
+             correctCount++;
+           } else {
+             incorrectQuestionsDetail.push({
+               question_number: question.question_number,
+               question_text: question.question_text,
+               options: question.options,
+               user_answer: sortedSelected,
+               correct_answer: correct,
+               explanation: question.explanation,
+               image_url: question.image_url,
+             });
+           }
+         }
 
-    const score = examQuestions.length > 0 ? (correctCount / examQuestions.length) * 100 : 0;
-    const examEndTime = Date.now();
-    // Ensure examStartTime is valid before calculating duration
-    const duration = examStartTime ? Math.round((examEndTime - examStartTime) / 1000) : 0; // Duration in seconds
+         const score = examQuestions.length > 0 ? (correctCount / examQuestions.length) * 100 : 0;
+         const examEndTime = Date.now();
+         // Ensure examStartTime is valid before calculating duration
+         const duration = examStartTime && examStartTime > 0 ? Math.round((examEndTime - examStartTime) / 1000) : 0; // Duration in seconds
+         console.log(`ExamTakePage: Score calculated: ${score.toFixed(2)}%, Duration: ${duration}s`);
 
-    const recordData = {
-      userId: 'anonymous', // TODO: Replace with actual user ID if authentication is added
-      score: parseFloat(score.toFixed(2)),
-      totalQuestions: examQuestions.length,
-      correctCount: correctCount,
-      incorrectQuestions: incorrectQuestionsDetail,
-      duration: duration,
-      // timestamp is handled by Firestore or context.addExamRecord
-    };
+         const recordData = {
+           userId: 'anonymous', // TODO: Replace with actual user ID if authentication is added
+           score: parseFloat(score.toFixed(2)),
+           totalQuestions: examQuestions.length,
+           correctCount: correctCount,
+           incorrectQuestions: incorrectQuestionsDetail,
+           duration: duration,
+           // timestamp is handled by Firestore or context.addExamRecord
+         };
 
-    try {
-      console.log("ExamTakePage: Saving exam record to Firestore:", recordData);
-      const docId = await saveExamRecord(recordData);
-      const finalTimestamp = Date.now(); // Use final submission time for local record consistency
-      const fullRecord: ExamRecord = {
-        ...recordData,
-        id: docId,
-        timestamp: finalTimestamp,
-      };
-      console.log("ExamTakePage: Adding exam record to context history:", fullRecord);
-      addExamRecord(fullRecord); // This should also clear examProgress via context
-      toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
-      router.push(`/exam/results?recordId=${docId}`);
-    } catch (error) {
-      console.error("ExamTakePage: Failed to save exam record:", error);
-      toast({ title: "Submission Failed", description: "Could not save exam results. Please try again.", variant: "destructive" });
-      setIsSubmitting(false); // Allow retry on failure
-    }
-     // No finally block needed to set submitting false, success navigates away
+         console.log("ExamTakePage: Prepared record data:", recordData);
+         console.log("ExamTakePage: Saving exam record to Firestore...");
+         const docId = await saveExamRecord(recordData);
+         console.log(`ExamTakePage: Firestore save successful. Document ID: ${docId}`);
+
+         const finalTimestamp = Date.now(); // Use final submission time for local record consistency
+         const fullRecord: ExamRecord = {
+           ...recordData,
+           id: docId,
+           timestamp: finalTimestamp,
+         };
+         console.log("ExamTakePage: Adding exam record to context history:", fullRecord);
+         addExamRecord(fullRecord); // This should also clear examProgress via context
+         console.log("ExamTakePage: Context updated.");
+
+         toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
+         console.log("ExamTakePage: Navigating to results page...");
+         router.push(`/exam/results?recordId=${docId}`);
+
+     } catch (error) {
+         console.error("ExamTakePage: Failed to save exam record during submission:", error);
+         toast({ title: "Submission Failed", description: "Could not save exam results. Please try again.", variant: "destructive" });
+         setIsSubmitting(false); // Allow retry on failure
+     }
+     // Note: No finally block needed to set isSubmitting false, success navigates away. If it fails, catch block handles it.
   }, [
       isSubmitting,
       isLocallyInitialized, // Depend on local init
@@ -372,7 +386,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
   // If initialization finished but somehow no questions are loaded (should be caught by redirect earlier)
   if (examQuestions.length === 0) {
       console.error("ExamTakePage: Render reached with zero questions after initialization.");
-      return <div className="container mx-auto p-4 text-center">Error: No exam questions loaded.</div>;
+      return <div className="container mx-auto p-4 text-center">Error: No exam questions loaded. Redirecting...</div>;
   }
 
    // Validate currentQuestionIndex before accessing examQuestions
@@ -388,8 +402,10 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
   const currentQuestion = examQuestions[currentQuestionIndex];
   // This check should ideally not be needed if index validation above works, but as a safeguard:
   if (!currentQuestion) {
-     console.error(`ExamTakePage: currentQuestion is null/undefined at index ${currentQuestionIndex}.`);
-     return <div className="container mx-auto p-4 text-center">Error loading current question data.</div>;
+     console.error(`ExamTakePage: currentQuestion is null/undefined at index ${currentQuestionIndex}. Redirecting...`);
+     // Redirect back to config if state is broken
+     router.replace('/exam/config');
+     return <div className="container mx-auto p-4 text-center">Error loading current question data. Redirecting...</div>;
   }
 
   const currentQuestionNumber = currentQuestion.question_number;

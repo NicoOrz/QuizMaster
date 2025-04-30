@@ -204,17 +204,20 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   // Function to add a new exam record
   const addExamRecord = useCallback((record: ExamRecord) => {
     setExamHistory(prev => {
-        // Assign ID if missing (though Firestore ID should be preferred)
+        // Ensure record has an ID (should be provided by Firestore ideally)
         const recordWithId = { ...record, id: record.id ?? `local-${Date.now()}-${Math.random()}` };
-        // Avoid duplicates just in case
+        // Avoid duplicates
         const exists = prev.some(r => r.id === recordWithId.id);
-        if (exists) return prev;
-        const newState = [...prev, recordWithId].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
+        if (exists) {
+            console.warn(`Exam record with ID ${recordWithId.id} already exists in history. Skipping add.`);
+            return prev;
+        }
+        const newState = [recordWithId, ...prev].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
         return newState;
     });
-    // Clear exam progress after successfully saving/submitting
+    // IMPORTANT: Clear exam progress *after* successfully adding the record to history
     clearExamProgress();
-  }, [clearExamProgress]);
+  }, [clearExamProgress]); // Dependency on clearExamProgress
 
    // Function to add a new practice result and return it with the final ID
    const addPracticeResult = useCallback((result: Omit<PracticeResult, 'id'>): PracticeResult => {
