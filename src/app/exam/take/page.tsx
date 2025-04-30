@@ -1,8 +1,6 @@
-
-"use client";
-
+ 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useQuiz } from '@/context/QuizContext';
 import type { Question, UserAnswer, ExamRecord } from '@/types/quiz';
 import { QuestionCard } from '@/components/quiz/QuestionCard';
@@ -26,13 +24,12 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-export default function ExamTakePage() {
+export default function ExamTakePage({searchParams}: {searchParams: Record<string, string>}) {
   const { questions: allQuestions, addExamRecord, examProgress, setExamProgress, clearExamProgress } = useQuiz();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { toast } = useToast();
   const requestedNumQuestionsParam = searchParams.get('numQuestions');
-
+  
   // --- State Initialization ---
   // Attempt to load from context first, then generate new if needed
   const [examQuestions, setExamQuestions] = useState<Question[]>(examProgress?.questions ?? []);

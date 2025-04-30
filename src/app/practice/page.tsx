@@ -36,72 +36,61 @@ export default function PracticePage() {
 
   // Derived state for the current question based on index
    const currentQuestion = practiceQuestions[currentQuestionIndex];
+   // Get the **actual question_number** of the currently displayed question
    const currentQuestionNumber = currentQuestion?.question_number;
+
 
   // --- Initialization and Validation Effect ---
   useEffect(() => {
-     // Wait for context to finish loading before initializing
-     if (isContextLoading || !isContextInitialized) {
-         console.log("PracticePage: Waiting for context to initialize...");
+     if (isContextLoading || !isContextInitialized || isComponentInitialized) {
+         // console.log("PracticePage: Waiting for context/component init...");
          return;
      }
 
-     console.log("PracticePage: Context initialized. Checking practiceProgress:", practiceProgress);
+     // console.log("PracticePage: Context initialized. Checking practiceProgress:", practiceProgress);
 
      if (practiceProgress && practiceProgress.questions.length > 0) {
-        // Validate progress data before setting state
-        const questionsExist = Array.isArray(practiceProgress.questions) && practiceProgress.questions.length > 0;
-        const indexIsValid = typeof practiceProgress.currentIndex === 'number' &&
-                              practiceProgress.currentIndex >= 0 &&
-                              practiceProgress.currentIndex < practiceProgress.questions.length;
-        const selectionsExist = typeof practiceProgress.selections === 'object' && practiceProgress.selections !== null;
+        const { questions, currentIndex, selections } = practiceProgress;
+        const questionsExist = Array.isArray(questions) && questions.length > 0;
+        const indexIsValid = typeof currentIndex === 'number' && currentIndex >= 0 && currentIndex < questions.length;
+        const selectionsExist = typeof selections === 'object' && selections !== null;
 
         if (questionsExist && indexIsValid && selectionsExist) {
-             // Load state from valid context
-             setPracticeQuestions(practiceProgress.questions);
-             setCurrentQuestionIndex(practiceProgress.currentIndex);
-             setCurrentSelections(practiceProgress.selections);
-             setIsComponentInitialized(true); // Mark local component as initialized *after* setting state
-             // Reset feedback for the initially loaded question
+             setPracticeQuestions(questions);
+             setCurrentQuestionIndex(currentIndex);
+             setCurrentSelections(selections);
+             setIsComponentInitialized(true);
              setShowAnswer(false);
              setIsCorrect(null);
-             console.log("Practice session loaded successfully from progress.", practiceProgress);
+             // console.log("Practice session loaded successfully from progress.");
         } else {
-             // Invalid progress data found in context
-             console.warn("PracticePage: Invalid practice progress structure found in context. Clearing and redirecting.", practiceProgress);
-             toast({
-                title: "Invalid Progress",
-                description: "Invalid practice session data found. Clearing and redirecting.",
-                variant: "destructive",
-             });
-             clearPracticeProgress(); // Clear the invalid data from context/storage
+             console.warn("PracticePage: Invalid practice progress structure. Clearing and redirecting.", practiceProgress);
+             toast({ title: "Invalid Progress", description: "Clearing invalid session data.", variant: "destructive" });
+             clearPracticeProgress();
              setShouldRedirect(true);
         }
      } else {
-         // No valid progress found in context
-         console.log("PracticePage: No active practice session found in context. Redirecting.");
-         toast({
-             title: "No Practice Session",
-             description: "No active practice session found. Redirecting to configuration.",
-             variant: "destructive",
-         });
-         setShouldRedirect(true); // Set state to trigger redirect effect
+         // console.log("PracticePage: No active practice session. Redirecting.");
+         // Don't toast here, config page handles the "no progress" case gracefully
+         // toast({ title: "No Practice Session", description: "Redirecting to configuration.", variant: "destructive" });
+         setShouldRedirect(true);
      }
-  }, [practiceProgress, isContextLoading, isContextInitialized, toast, clearPracticeProgress]); // Add isContextInitialized dependency
+  }, [practiceProgress, isContextLoading, isContextInitialized, isComponentInitialized, toast, clearPracticeProgress]);
 
   // --- Redirect Effect ---
    useEffect(() => {
     if (shouldRedirect) {
         console.log("PracticePage: Triggering redirect to /practice/config");
-        router.replace('/practice/config'); // Use replace to avoid adding to history
+        // Use timeout to ensure state updates settle before redirecting
+        const timer = setTimeout(() => router.replace('/practice/config'), 0);
+        return () => clearTimeout(timer); // Cleanup timer on unmount or if redirect changes
     }
    }, [shouldRedirect, router]);
 
    // Effect to reset feedback when index changes *after* initialization
     useEffect(() => {
-        // Only run if the component has successfully initialized
         if (isComponentInitialized) {
-            console.log(`PracticePage: Index changed to ${currentQuestionIndex}. Resetting feedback.`);
+            // console.log(`PracticePage: Index changed to ${currentQuestionIndex}. Resetting feedback.`);
             setShowAnswer(false);
             setIsCorrect(null);
         }
@@ -110,40 +99,31 @@ export default function PracticePage() {
 
   // Effect to update practice progress in context whenever index or selections change
   useEffect(() => {
-    // Only save if component initialized, context initialized, and there are questions
     if (isComponentInitialized && isContextInitialized && practiceQuestions.length > 0) {
         setPracticeProgress(prev => {
-            if (!prev) {
-                // Should not happen if isComponentInitialized is true, but safety check
-                console.warn("PracticePage: setPracticeProgress called but previous context state is null.");
-                return null;
-            }
+            if (!prev) return null; // Should not happen if isComponentInitialized is true
 
-            // Create the potential new state based *only* on current local state
+            // Update only the relevant parts: index and selections
             const newState: PracticeProgress = {
-                ...prev, // Keep existing range, etc. from the previous valid state
+                ...prev,
                 currentIndex: currentQuestionIndex,
                 selections: currentSelections,
-                questions: practiceQuestions, // Ensure questions are also up-to-date
-                range: prev.range // Explicitly carry over the range
+                questions: practiceQuestions, // Update questions in case they were modified (e.g., shuffle on load)
             };
 
-            // Prevent unnecessary updates if the state object reference changes but content is the same.
-             if (prev.currentIndex !== currentQuestionIndex ||
-                 JSON.stringify(prev.selections) !== JSON.stringify(currentSelections) ||
-                 JSON.stringify(prev.questions) !== JSON.stringify(practiceQuestions)) // Compare questions content too
-             {
+            // Basic check for actual changes to avoid unnecessary writes
+            if (prev.currentIndex !== newState.currentIndex ||
+                JSON.stringify(prev.selections) !== JSON.stringify(newState.selections) ||
+                JSON.stringify(prev.questions) !== JSON.stringify(newState.questions)) {
                  // console.log("Practice progress updated in context/localStorage.");
                  return newState;
              }
-
-            // console.log("Skipping practice progress update, no change detected.");
-            return prev;
+            return prev; // No change
         });
     }
   }, [
       isComponentInitialized,
-      isContextInitialized, // Ensure context is ready too
+      isContextInitialized,
       practiceQuestions,
       currentQuestionIndex,
       currentSelections,
@@ -151,21 +131,19 @@ export default function PracticePage() {
   ]);
 
 
-  // Handle changes to the selected answers for the current question
   const handleAnswerChange = useCallback((questionNumber: number, answerKey: string, checked: boolean) => {
-    console.log(`handleAnswerChange called: Q#${questionNumber}, Key: ${answerKey}, Checked: ${checked}`);
+    // console.log(`handleAnswerChange: Q#${questionNumber}, Key: ${answerKey}, Checked: ${checked}, showAnswer: ${showAnswer}`);
     if (showAnswer) {
-      console.log("handleAnswerChange: Skipping update, answer already shown.");
+      // console.log("handleAnswerChange: Skipping, answer already shown.");
       return;
     }
 
     setCurrentSelections(prevSelections => {
-      console.log(`handleAnswerChange -> setCurrentSelections: prevSelections for Q#${questionNumber}`, prevSelections[questionNumber]);
       const previousQuestionSelection = prevSelections[questionNumber] || [];
-      // Find question in the *local state* which should be initialized by now
       const question = practiceQuestions.find(q => q.question_number === questionNumber);
+
       if (!question) {
-          console.warn(`handleAnswerChange: Question #${questionNumber} not found in local state.`);
+          console.warn(`handleAnswerChange: Question #${questionNumber} not found.`);
           return prevSelections;
       }
 
@@ -179,31 +157,22 @@ export default function PracticePage() {
           newSelection = previousQuestionSelection.filter(ans => ans !== answerKey).sort();
         }
       } else {
-        // Radio button behavior: only one can be selected
+        newSelection = checked ? [answerKey] : []; // Allow unchecking radio button conceptually? Or just set directly.
+        // RadioGroup usually handles the single selection logic, onValueChange might be better here.
+        // For simplicity with the shared handler, we'll set directly:
         newSelection = [answerKey];
       }
 
-      // Optimization: Check if the actual selection for this question *changed*
-      if (
-        previousQuestionSelection.length === newSelection.length &&
-        previousQuestionSelection.every((val, index) => val === newSelection[index])
-       ) {
-         console.log(`handleAnswerChange -> setCurrentSelections: No change detected for Q#${questionNumber}. Skipping state update.`);
-         return prevSelections;
-      }
-
-       console.log(`handleAnswerChange -> setCurrentSelections: Updating selections for Q#${questionNumber} to:`, newSelection);
+       // console.log(`handleAnswerChange -> Setting selections for Q#${questionNumber} to:`, newSelection);
        return {
          ...prevSelections,
          [questionNumber]: newSelection,
        };
     });
-  }, [showAnswer, practiceQuestions]); // Depend on practiceQuestions (local state)
+  }, [showAnswer, practiceQuestions]);
 
 
-  // Check the answer for the current question
   const checkAnswer = useCallback(() => {
-    // Ensure question exists (use local state derived value)
     if (!currentQuestion || !currentQuestionNumber) {
         console.warn("checkAnswer: Current question data is missing.");
         return;
@@ -216,7 +185,7 @@ export default function PracticePage() {
         return;
     }
 
-     if (showAnswer) return; // Already showing answer
+     if (showAnswer) return;
 
     const correctAnswers = currentQuestion.correct_answer;
     const sortedSelected = [...userSelection].sort();
@@ -226,7 +195,8 @@ export default function PracticePage() {
                     sortedSelected.every((value, index) => value === sortedCorrect[index]);
 
     setIsCorrect(correct);
-    setShowAnswer(true); // Reveal feedback
+    setShowAnswer(true);
+    // console.log(`Checked answer for Q#${currentQuestionNumber}. Correct: ${correct}`);
   }, [currentQuestion, currentQuestionNumber, currentSelections, showAnswer, toast]);
 
 
@@ -239,7 +209,7 @@ export default function PracticePage() {
 
   const goToPreviousQuestion = useCallback(() => {
     if (currentQuestionIndex > 0) {
-      setCurrentQuestionIndex(prev => prev + 1); // Corrected: should be prev - 1
+       setCurrentQuestionIndex(prev => prev - 1); // Corrected here
     }
   }, [currentQuestionIndex]);
 
@@ -252,27 +222,31 @@ export default function PracticePage() {
   }, [practiceQuestions.length]);
 
   const goToHome = useCallback(() => {
-    router.push('/'); // Progress is saved automatically by useEffect
+    router.push('/');
   }, [router]);
 
    const goToConfig = useCallback(() => {
-     router.push('/practice/config'); // Go back to config page
+     router.push('/practice/config');
    }, [router]);
 
 
   const handleResetPractice = useCallback(() => {
-    clearPracticeProgress(); // Clears context and localStorage
-    toast({ title: "Practice Reset", description: "Your progress has been cleared. Redirecting to configuration." });
-    setShouldRedirect(true); // Trigger redirect effect after clearing
+    clearPracticeProgress();
+    toast({ title: "Practice Reset", description: "Your progress has been cleared. Redirecting..." });
+    setShouldRedirect(true);
   }, [clearPracticeProgress, toast]);
 
 
   // --- Render Logic ---
-  // Loading States:
-  // 1. Context is still loading/initializing.
-  // 2. Context is initialized, but local component hasn't loaded state yet.
-  // 3. Redirect is pending.
-  if (isContextLoading || !isContextInitialized || !isComponentInitialized || shouldRedirect) {
+  if (shouldRedirect) {
+      // Render minimal loading/redirecting state while redirect effect runs
+      return (
+          <div className="container mx-auto p-4 min-h-screen flex items-center justify-center">
+              Redirecting...
+          </div>
+      );
+  }
+  if (isContextLoading || !isContextInitialized || !isComponentInitialized) {
      return (
          <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 space-y-6">
              {/* Skeleton Header */}
@@ -298,17 +272,18 @@ export default function PracticePage() {
      );
   }
 
-  // After initialization, check if currentQuestion is valid (safety net)
-  // This should ideally not be reached if initialization logic is correct
+  // Safety check after initialization logic
   if (!currentQuestion) {
-      console.error("PracticePage Render: Current question is undefined after initialization checks. State might be inconsistent.");
-      // Avoid rendering potentially broken UI, maybe show a specific error message or redirect again
-      setShouldRedirect(true); // Attempt redirect again if this state is reached
+      // This should ideally not be reached if initialization logic is correct
+      console.error("PracticePage Render: Current question is undefined after initialization. Triggering redirect.");
+      setShouldRedirect(true); // Trigger redirect if state is inconsistent
       return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
   }
 
-
+  // Get the potentially empty selection for the *current* question number
   const currentSelectionForCard = currentSelections[currentQuestionNumber] || [];
+  // Get the original question number for display
+  const originalQuestionNumber = currentQuestion.question_number;
 
   return (
     <div className="container mx-auto p-4 min-h-screen flex flex-col items-center pt-10 pb-10 relative">
@@ -355,7 +330,7 @@ export default function PracticePage() {
             <SheetTitle>Practice Overview</SheetTitle>
           </SheetHeader>
           <QuizOverview
-            questions={practiceQuestions} // Pass the subset of questions
+            questions={practiceQuestions} // Pass the subset (potentially shuffled)
             userAnswers={currentSelections} // Pass the full selections record
             currentQuestionIndex={currentQuestionIndex}
             navigateToQuestion={navigateToQuestion}
@@ -367,7 +342,7 @@ export default function PracticePage() {
       <h1 className="text-3xl font-bold mb-2 mt-12">Practice Mode</h1>
        {practiceProgress?.range && (
             <p className="text-sm text-muted-foreground mb-6">
-                (Questions {practiceProgress.range.start} - {practiceProgress.range.end})
+                (Selected original questions {practiceProgress.range.start} - {practiceProgress.range.end})
             </p>
        )}
 
@@ -375,15 +350,16 @@ export default function PracticePage() {
       {/* Question Card */}
       <div className="w-full max-w-4xl">
         <QuestionCard
-          key={currentQuestionNumber} // Ensure re-render on question change
+          key={currentQuestionNumber} // Ensure re-render on question number change
           question={currentQuestion}
+          practiceQuestionNumber={originalQuestionNumber} // Pass original number
           selectedAnswers={currentSelectionForCard}
-          onAnswerChange={handleAnswerChange} // Pass the stable callback
+          onAnswerChange={handleAnswerChange}
           questionIndex={currentQuestionIndex}
-          totalQuestions={practiceQuestions.length} // Use length of subset
-          revealAnswers={showAnswer} // Pass the state to control feedback visibility in card
-          userAnswer={showAnswer ? currentSelectionForCard : undefined} // Pass the selection when revealing
-          isDisabled={showAnswer} // Disable inputs when feedback is shown
+          totalQuestions={practiceQuestions.length}
+          revealAnswers={showAnswer}
+          userAnswer={showAnswer ? currentSelectionForCard : undefined}
+          isDisabled={showAnswer}
         />
       </div>
 
@@ -403,7 +379,6 @@ export default function PracticePage() {
             <Separator className="my-3" />
             <div>
               <h4 className="font-semibold mb-1 text-sm">Explanation:</h4>
-              {/* Use whitespace-pre-wrap for explanation */}
               <p className="text-sm whitespace-pre-wrap text-muted-foreground">
                 {currentQuestion.explanation || "No explanation provided."}
               </p>
@@ -427,12 +402,21 @@ export default function PracticePage() {
               Check Answer
             </Button>
           ) : (
-            <Button onClick={goToNextQuestion} disabled={currentQuestionIndex === practiceQuestions.length - 1}>
+             // Show "Next" button even if it's the last question, to provide clear progression end
+             <Button
+               onClick={goToNextQuestion}
+               disabled={currentQuestionIndex === practiceQuestions.length - 1}
+              >
               Next <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           )}
         </CardContent>
       </Card>
+
+        {/* Add a message on the last question after checking */}
+       {showAnswer && currentQuestionIndex === practiceQuestions.length - 1 && (
+          <p className="text-center text-muted-foreground mt-4">You've reached the end of this practice session.</p>
+       )}
     </div>
   );
 }

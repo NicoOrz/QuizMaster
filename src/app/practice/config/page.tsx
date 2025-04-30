@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Play, Home, AlertTriangle, RotateCcw } from 'lucide-react';
 import type { Question, PracticeProgress } from '@/types/quiz';
 import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton
+import { shuffleArray } from '@/lib/utils'; // Import shuffleArray
 
 // Helper to sort questions by question_number numerically
 const sortQuestions = (questions: Question[]) => {
@@ -21,7 +22,7 @@ const sortQuestions = (questions: Question[]) => {
 };
 
 export default function PracticeConfigPage() {
-  const { questions: allQuestions, practiceProgress, clearPracticeProgress, setPracticeProgress, isLoading } = useQuiz();
+  const { questions: allQuestions, practiceProgress, clearPracticeProgress, setPracticeProgress, isLoading, isInitialized: isContextInitialized } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -32,7 +33,7 @@ export default function PracticeConfigPage() {
   // Safe initial states that don't rely on localStorage
   const [range, setRange] = useState<[number, number]>([1, Math.min(10, maxQuestions > 0 ? maxQuestions : 10)]); // Default range
   const [showResumeDialog, setShowResumeDialog] = useState(false); // Default to false
-  const [isInitialized, setIsInitialized] = useState(false); // Track client-side initialization
+  const [isComponentInitialized, setIsComponentInitialized] = useState(false); // Track client-side initialization
 
   // Get min/max question numbers from the sorted list
    const minQuestionNumber = sortedQuestions[0]?.question_number ?? 1;
@@ -54,61 +55,53 @@ export default function PracticeConfigPage() {
    // Client-side initialization effect
    useEffect(() => {
     // This effect runs only on the client after hydration
-    if (isLoading || isInitialized) return; // Don't run if loading or already initialized
+    // Wait until context is initialized AND component is not already initialized
+    if (isLoading || !isContextInitialized || isComponentInitialized) return;
+
+    const currentSortedQuestions = sortQuestions(allQuestions); // Get current sorted questions
+    const currentMaxQuestions = currentSortedQuestions.length;
 
     const defaultStart = 1;
-    // Calculate default end based on potentially updated maxQuestions
-    const currentMaxQuestions = sortQuestions(allQuestions).length;
     const defaultEnd = Math.min(10, currentMaxQuestions > 0 ? currentMaxQuestions : 10);
 
     if (currentMaxQuestions > 0) {
-        if (practiceProgress?.range) {
-            // Re-calculate map inside effect if needed, though useMemo might be sufficient if `sortedQuestions` updates correctly
-            const currentQuestionIndexMap = new Map<number, number>();
-            sortQuestions(allQuestions).forEach((q, index) => currentQuestionIndexMap.set(q.question_number, index + 1));
+        // Build map based on current questions
+        const currentQuestionIndexMap = new Map<number, number>();
+        currentSortedQuestions.forEach((q, index) => currentQuestionIndexMap.set(q.question_number, index + 1));
 
+        if (practiceProgress?.range) {
             const savedStartIndex = currentQuestionIndexMap.get(practiceProgress.range.start) ?? defaultStart;
             const savedEndIndex = currentQuestionIndexMap.get(practiceProgress.range.end) ?? defaultEnd;
-            // Ensure indices are within current bounds
             const validStartIndex = Math.max(1, Math.min(savedStartIndex, currentMaxQuestions));
             const validEndIndex = Math.max(validStartIndex, Math.min(savedEndIndex, currentMaxQuestions));
             setRange([validStartIndex, validEndIndex]);
-            setShowResumeDialog(true);
-        } else if (practiceProgress && !practiceProgress.range && practiceProgress.questions.length > 0) {
-             // Re-calculate map inside effect
-            const currentQuestionIndexMap = new Map<number, number>();
-             sortQuestions(allQuestions).forEach((q, index) => currentQuestionIndexMap.set(q.question_number, index + 1));
-
-            const savedQuestionNumbers = practiceProgress.questions.map(q => q.question_number).sort((a, b) => a - b);
-            const startIndex = currentQuestionIndexMap.get(savedQuestionNumbers[0]) ?? defaultStart;
-            const endIndex = currentQuestionIndexMap.get(savedQuestionNumbers[savedQuestionNumbers.length - 1]) ?? defaultEnd;
-             // Ensure indices are within current bounds
-            const validStartIndex = Math.max(1, Math.min(startIndex, currentMaxQuestions));
-            const validEndIndex = Math.max(validStartIndex, Math.min(endIndex, currentMaxQuestions));
-
-            setPracticeProgress(prev => prev ? { ...prev, range: { start: savedQuestionNumbers[0], end: savedQuestionNumbers[savedQuestionNumbers.length - 1] } } : null);
-            setRange([validStartIndex, validEndIndex]);
-            setShowResumeDialog(true);
+            if (practiceProgress.questions.length > 0) { // Only show resume if there are questions
+                setShowResumeDialog(true);
+            } else { // Clear invalid progress if range exists but no questions
+                 clearPracticeProgress();
+                 setRange([defaultStart, validEndIndex]); // Reset range
+                 console.log("Cleared invalid practice progress (range but no questions).");
+            }
         } else {
-            // No progress, set default range based on actual maxQuestions
-             const validDefaultEnd = Math.min(10, currentMaxQuestions);
+            // No existing valid progress range, set default
+             const validDefaultEnd = Math.min(10, currentMaxQuestions > 0 ? currentMaxQuestions : 10);
              setRange([defaultStart, validDefaultEnd]);
              if (practiceProgress) { // Clear any potentially invalid progress found
                  clearPracticeProgress();
-                 console.log("Cleared potentially invalid practice progress during init.");
+                 console.log("Cleared potentially invalid practice progress during init (no range).");
              }
         }
-    } else if (allQuestions.length === 0 && !isLoading) { // Check !isLoading here too
+    } else if (!isLoading) { // Only show toast if not loading and no questions
         toast({ variant: "destructive", title: "No Questions", description: "Please import a question bank first." });
         router.push('/');
     } else {
-         // Case where maxQuestions is 0 but still loading or some other edge case
+         // Still loading or some other edge case
          setRange([defaultStart, defaultEnd]); // Set a fallback default
     }
 
-    setIsInitialized(true); // Mark client-side initialization complete
+    setIsComponentInitialized(true); // Mark client-side initialization complete
 
-   }, [isLoading, isInitialized, allQuestions, practiceProgress, setPracticeProgress, clearPracticeProgress, router, toast]); // Use allQuestions as dep
+   }, [isLoading, isContextInitialized, isComponentInitialized, allQuestions, practiceProgress, clearPracticeProgress, router, toast]); // Added isContextInitialized
 
 
   const handleSliderChange = useCallback((value: number[]) => {
@@ -120,8 +113,8 @@ export default function PracticeConfigPage() {
 
   // Handles input changes for start/end numbers
    const handleInputChange = useCallback((type: 'start' | 'end', event: React.ChangeEvent<HTMLInputElement>) => {
-     let value = parseInt(event.target.value, 10);
      const currentMax = sortedQuestions.length; // Use current length
+     let value = parseInt(event.target.value, 10);
 
      if (isNaN(value)) {
        value = type === 'start' ? 1 : range[0]; // Default smartly
@@ -135,15 +128,26 @@ export default function PracticeConfigPage() {
 
      if (type === 'start') {
        newStart = value;
-       if (newStart > newEnd) {
-           newEnd = newStart; // Ensure end is not less than start
+       if (newStart > newEnd && newEnd <= currentMax ) { // Only adjust end if it's within bounds
+           newEnd = newStart;
+       } else if (newStart > currentMax) { // If start exceeds max, clamp both
+           newStart = currentMax;
+           newEnd = currentMax;
        }
      } else { // type === 'end'
        newEnd = value;
-       if (newEnd < newStart) {
-           newStart = newEnd; // Ensure start is not more than end
+       if (newEnd < newStart && newStart >= 1) { // Only adjust start if it's within bounds
+           newStart = newEnd;
+       } else if (newEnd < 1) { // If end is less than 1, clamp both
+            newStart = 1;
+            newEnd = 1;
        }
      }
+     // Final check to ensure start <= end and within [1, currentMax]
+     newStart = Math.max(1, Math.min(newStart, currentMax));
+     newEnd = Math.max(1, Math.min(newEnd, currentMax));
+     if (newStart > newEnd) newEnd = newStart; // Ensure start <= end
+
      setRange([newStart, newEnd]);
    }, [range, sortedQuestions.length]); // Depend on current length
 
@@ -164,28 +168,31 @@ export default function PracticeConfigPage() {
     const currentQuestionNumberMap = new Map<number, number>();
     sortedQuestions.forEach((q, index) => currentQuestionNumberMap.set(index + 1, q.question_number));
 
-    // Get the actual question numbers for the selected range
+    // Get the actual question numbers for the selected range (for display/progress saving)
     const startQuestionNum = currentQuestionNumberMap.get(startIndex) ?? (sortedQuestions[startIndex - 1]?.question_number ?? 0);
     const endQuestionNum = currentQuestionNumberMap.get(endIndex) ?? (sortedQuestions[endIndex - 1]?.question_number ?? 0);
 
     // Filter sorted questions based on the *index* range
-    const selectedQuestions = sortedQuestions.slice(startIndex - 1, endIndex);
+    const selectedQuestionsSlice = sortedQuestions.slice(startIndex - 1, endIndex);
 
-    if (selectedQuestions.length === 0) {
+    if (selectedQuestionsSlice.length === 0) {
          toast({ variant: "destructive", title: "No Questions Selected", description: "The selected range resulted in zero questions." });
          return;
     }
 
+    // Shuffle the selected questions
+    const shuffledSelectedQuestions = shuffleArray(selectedQuestionsSlice);
+
     // Clear previous progress and set new progress
     clearPracticeProgress();
     const newProgress: PracticeProgress = {
-      questions: selectedQuestions,
+      questions: shuffledSelectedQuestions, // Use shuffled questions
       currentIndex: 0,
       selections: {},
-      range: { start: startQuestionNum, end: endQuestionNum } // Store the actual question numbers
+      range: { start: startQuestionNum, end: endQuestionNum } // Store the original question numbers range
     };
     setPracticeProgress(newProgress);
-    console.log("Starting new practice with range:", newProgress.range, "Questions:", selectedQuestions.map(q=>q.question_number));
+    console.log("Starting new practice with range:", newProgress.range, "Shuffled Questions:", shuffledSelectedQuestions.map(q=>q.question_number));
 
     router.push(`/practice`); // Navigate to the practice page
   }, [range, sortedQuestions, clearPracticeProgress, setPracticeProgress, toast, router]);
@@ -222,11 +229,11 @@ export default function PracticeConfigPage() {
    // --- Render Logic ---
 
    // Display Skeleton or loading message until client-side initialization is complete
-  if (!isInitialized || isLoading) {
+  if (!isComponentInitialized || isLoading) {
      return (
        <div className="container mx-auto p-4 min-h-screen flex flex-col items-center justify-center space-y-6">
          <Skeleton className="h-10 w-32 absolute top-4 left-4" />
-         <Skeleton className="h-8 w-64" /> {/* Title */}
+         <Skeleton className="h-8 w-64 mt-12" /> {/* Title */}
          <Skeleton className="w-full max-w-lg h-80" /> {/* Card */}
        </div>
      );
@@ -247,8 +254,9 @@ export default function PracticeConfigPage() {
 
   // Calculate display values based on current state
   const numSelectedQuestions = Math.max(0, range[1] - range[0] + 1);
-  const startDisplayNum = questionNumberMap.get(range[0]) ?? (sortedQuestions[range[0]-1]?.question_number ?? '?');
-  const endDisplayNum = questionNumberMap.get(range[1]) ?? (sortedQuestions[range[1]-1]?.question_number ?? '?');
+  // Get actual question numbers from the maps for display
+  const startDisplayNum = questionNumberMap.get(range[0]) ?? '-';
+  const endDisplayNum = questionNumberMap.get(range[1]) ?? '-';
 
 
   return (
@@ -260,8 +268,8 @@ export default function PracticeConfigPage() {
                     <AlertDialogTitle className="flex items-center"><AlertTriangle className="mr-2 text-yellow-500"/> Practice Session Found</AlertDialogTitle>
                     <AlertDialogDescription>
                         You have a practice session in progress
-                        {practiceProgress?.range ? ` (questions ${practiceProgress.range.start} - ${practiceProgress.range.end})` : ''}
-                        {' '}with {practiceProgress?.questions?.length ?? '?'} questions.
+                        {practiceProgress?.range ? ` (originally selected questions ${practiceProgress.range.start} - ${practiceProgress.range.end})` : ''}
+                        {' '}with {practiceProgress?.questions?.length ?? '?'} questions remaining.
                         Would you like to resume it or start a new one?
                     </AlertDialogDescription>
                 </AlertDialogHeader>
@@ -278,15 +286,15 @@ export default function PracticeConfigPage() {
       <Card className="w-full max-w-lg shadow-lg rounded-lg"> {/* Increased max-width */}
         <CardHeader className="text-center">
           <CardTitle className="text-2xl font-bold">Configure Practice Session</CardTitle>
-          <CardDescription>Select the range of questions (by order) you want to practice.</CardDescription>
+          <CardDescription>Select the range of questions (by original order) you want to practice.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6 p-6">
           <div className="space-y-2">
             <Label htmlFor="range-slider" className="text-center block">
-                Question Range: {range[0]} - {range[1]} ({numSelectedQuestions} questions)
+                Question Index Range: {range[0]} - {range[1]} ({numSelectedQuestions} questions)
             </Label>
              <p className="text-sm text-muted-foreground text-center">
-                (Covers question numbers: {startDisplayNum} - {endDisplayNum})
+                (Covers original question numbers: {startDisplayNum} - {endDisplayNum})
              </p>
             <Slider
               id="range-slider"
@@ -341,4 +349,3 @@ export default function PracticeConfigPage() {
     </div>
   );
 }
-

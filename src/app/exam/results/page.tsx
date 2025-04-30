@@ -2,8 +2,8 @@
 
 "use client";
 
-import React, { useEffect, useState, useCallback } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import React, { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { useQuiz } from '@/context/QuizContext';
 import type { ExamRecord, IncorrectQuestionDetail } from '@/types/quiz';
 import { Button } from '@/components/ui/button';
@@ -29,12 +29,11 @@ function formatDuration(seconds: number): string {
 }
 
 
-export default function ExamResultsPage() {
+export default function ExamResultsPage({ searchParams }: { searchParams: { [key: string]: string } }) {
   const { examHistory } = useQuiz(); // Get local history for potential fallback or quick access
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const recordId = searchParams.get('recordId');
   const [examRecord, setExamRecord] = useState<ExamRecord | null>(null);
+  const recordId = searchParams.recordId;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
