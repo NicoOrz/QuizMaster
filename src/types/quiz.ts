@@ -32,3 +32,22 @@ export interface ExamRecord {
   incorrectQuestions: IncorrectQuestionDetail[];
   duration?: number; // Optional: time taken in seconds
 }
+
+
+// --- Progress Interfaces ---
+
+export interface PracticeProgress {
+  questions: Question[]; // The specific subset of questions being practiced
+  currentIndex: number;
+  selections: Record<number, string[]>; // question_number -> selected options
+  // Optional: Store the original range for context, if needed later
+  range?: { start: number; end: number };
+}
+
+export interface ExamProgress {
+  questions: Question[]; // The specific questions for the current exam attempt
+  currentIndex: number;
+  answers: Record<number, UserAnswer>; // question_number -> UserAnswer
+  startTime: number; // Timestamp when the exam was started/resumed
+  configNumQuestions: number; // Store the number of questions requested for this exam
+}

@@ -5,7 +5,7 @@ import React from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
-import { BookOpenText, Timer, Play, RotateCcw } from 'lucide-react'; // Added Play, RotateCcw
+import { BookOpenText, Timer, Play, RotateCcw, Settings } from 'lucide-react'; // Added Settings
 import { useQuiz } from '@/context/QuizContext';
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
@@ -15,25 +15,33 @@ export function QuizModeSelector() {
   const { questions, practiceProgress, examProgress, clearPracticeProgress, clearExamProgress } = useQuiz();
   const { toast } = useToast();
 
-  const hasPracticeProgress = !!practiceProgress;
-  const hasExamProgress = !!examProgress && examProgress.questions.length > 0; // Check if examProgress is valid
+  // Check if progress exists and has questions
+  const hasPracticeProgress = !!practiceProgress && practiceProgress.questions.length > 0;
+  const hasExamProgress = !!examProgress && examProgress.questions.length > 0;
 
-  const startNewPractice = () => {
+  const configureNewPractice = () => {
     if (questions.length === 0) {
       toast({ variant: "destructive", title: "No Questions", description: "Please import a question bank first." });
       return;
     }
-    clearPracticeProgress(); // Ensure any old progress is cleared
-    router.push('/practice');
+    // Navigate to the practice configuration page
+    router.push('/practice/config');
   };
 
   const resumePractice = () => {
-    if (!practiceProgress) {
-        toast({ variant: "destructive", title: "Error", description: "No practice progress found to resume." });
+    if (!hasPracticeProgress) {
+        toast({ variant: "destructive", title: "Error", description: "No valid practice progress found to resume." });
+        clearPracticeProgress(); // Clear potentially invalid state
         return;
     }
-     router.push('/practice');
+     router.push('/practice'); // Go directly to practice page, it will load from context
   };
+
+   const discardAndStartNewPractice = () => {
+      clearPracticeProgress();
+      router.push('/practice/config');
+   };
+
 
   const startNewExam = () => {
      if (questions.length === 0) {
@@ -71,7 +79,7 @@ export function QuizModeSelector() {
                     </Button>
                     <AlertDialog>
                         <AlertDialogTrigger asChild>
-                            <Button size="lg" variant="outline" title="Start New Practice">
+                            <Button size="lg" variant="outline" title="Configure New Practice">
                                 <RotateCcw className="h-5 w-5" />
                             </Button>
                         </AlertDialogTrigger>
@@ -79,19 +87,19 @@ export function QuizModeSelector() {
                             <AlertDialogHeader>
                                 <AlertDialogTitle>Start New Practice?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                    Starting a new practice session will discard your current progress. Are you sure?
+                                    Starting a new practice session will discard your current progress and take you to the configuration screen. Are you sure?
                                 </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction onClick={startNewPractice}>Start New</AlertDialogAction>
+                                <AlertDialogAction onClick={discardAndStartNewPractice}>Start New</AlertDialogAction>
                             </AlertDialogFooter>
                         </AlertDialogContent>
                     </AlertDialog>
                 </div>
             ) : (
-                 <Button onClick={startNewPractice} size="lg" variant="secondary" disabled={questions.length === 0}>
-                   <BookOpenText className="mr-2 h-5 w-5" /> Start Practice
+                 <Button onClick={configureNewPractice} size="lg" variant="secondary" disabled={questions.length === 0}>
+                   <Settings className="mr-2 h-5 w-5" /> Configure Practice {/* Changed Icon */}
                  </Button>
             )}
         </div>
@@ -137,11 +145,11 @@ export function QuizModeSelector() {
           <p className="text-center text-sm text-destructive">Please import questions before starting.</p>
         )}
       </CardContent>
-      <CardFooter className="text-center text-sm text-muted-foreground">
-         {hasPracticeProgress && <span className="text-blue-600 dark:text-blue-400 block w-full mb-1">Practice in progress...</span>}
-         {hasExamProgress && <span className="text-blue-600 dark:text-blue-400 block w-full mb-1">Exam in progress...</span>}
-         Your progress is saved automatically.
-      </CardFooter>
+       <CardFooter className="flex flex-col items-center text-center text-sm text-muted-foreground space-y-1 pt-4">
+           {hasPracticeProgress && <span className="text-blue-600 dark:text-blue-400 block w-full">Practice in progress...</span>}
+           {hasExamProgress && <span className="text-blue-600 dark:text-blue-400 block w-full">Exam in progress...</span>}
+           <span>Your progress is saved automatically.</span>
+       </CardFooter>
     </Card>
   );
 }

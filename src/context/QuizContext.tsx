@@ -1,26 +1,12 @@
 
 "use client";
 
-import type { Question, ExamRecord, UserAnswer } from '@/types/quiz';
+import type { Question, ExamRecord, UserAnswer, PracticeProgress, ExamProgress } from '@/types/quiz';
 import React, { createContext, useContext, useState, ReactNode, Dispatch, SetStateAction, useEffect, useCallback } from 'react';
-
-// Define types for progress state
-interface PracticeProgress {
-  currentIndex: number;
-  selections: Record<number, string[]>; // question_number -> selected options
-}
-
-interface ExamProgress {
-  questions: Question[]; // The specific questions for the current exam attempt
-  currentIndex: number;
-  answers: Record<number, UserAnswer>; // question_number -> UserAnswer
-  startTime: number; // Timestamp when the exam was started/resumed
-  configNumQuestions: number; // Store the number of questions requested for this exam
-}
 
 
 interface QuizContextProps {
-  questions: Question[];
+  questions: Question[]; // All loaded questions
   setQuestions: Dispatch<SetStateAction<Question[]>>;
   examHistory: ExamRecord[];
   setExamHistory: Dispatch<SetStateAction<ExamRecord[]>>;
@@ -44,6 +30,8 @@ const QuizContext = createContext<QuizContextProps | undefined>(undefined);
 // localStorage keys
 const PRACTICE_PROGRESS_KEY = 'quizMasterPracticeProgress';
 const EXAM_PROGRESS_KEY = 'quizMasterExamProgress';
+const ALL_QUESTIONS_KEY = 'quizMasterAllQuestions'; // Key for all questions
+const EXAM_HISTORY_KEY = 'quizMasterExamHistory'; // Key for exam history
 
 // Helper to safely get item from localStorage
 const safelyGetLocalStorage = <T,>(key: string, defaultValue: T): T => {
@@ -52,9 +40,33 @@ const safelyGetLocalStorage = <T,>(key: string, defaultValue: T): T => {
     }
     try {
         const item = window.localStorage.getItem(key);
-        return item ? JSON.parse(item) : defaultValue;
+        // Ensure we don't parse "undefined" or "null" strings incorrectly
+        if (item === null || item === 'undefined') {
+             return defaultValue;
+        }
+        // Add basic check for empty progress objects that might have been saved incorrectly
+        const parsed = JSON.parse(item);
+        if (key === PRACTICE_PROGRESS_KEY && parsed && (!parsed.questions || !Array.isArray(parsed.questions))) {
+            console.warn(`Invalid practice progress structure found in localStorage for key "${key}". Resetting.`);
+            window.localStorage.removeItem(key);
+            return defaultValue;
+        }
+         if (key === EXAM_PROGRESS_KEY && parsed && (!parsed.questions || !Array.isArray(parsed.questions))) {
+            console.warn(`Invalid exam progress structure found in localStorage for key "${key}". Resetting.`);
+            window.localStorage.removeItem(key);
+            return defaultValue;
+        }
+
+        return parsed !== null ? parsed : defaultValue; // Return parsed value or default
     } catch (error) {
         console.error(`Error reading localStorage key “${key}”:`, error);
+         // Attempt to remove corrupted data
+         try {
+            window.localStorage.removeItem(key);
+            console.log(`Removed potentially corrupted localStorage item for key "${key}".`);
+         } catch (removeError) {
+             console.error(`Failed to remove corrupted localStorage item for key "${key}":`, removeError);
+         }
         return defaultValue;
     }
 };
@@ -65,7 +77,17 @@ const safelySetLocalStorage = (key: string, value: any) => {
         return;
     }
     try {
-        window.localStorage.setItem(key, JSON.stringify(value));
+        // Prevent saving null/undefined directly, remove instead if value is nullish
+        if (value === null || value === undefined) {
+             window.localStorage.removeItem(key);
+        } else {
+             // Ensure progress objects have the 'questions' array before saving
+             if ((key === PRACTICE_PROGRESS_KEY || key === EXAM_PROGRESS_KEY) && (!value.questions || !Array.isArray(value.questions))) {
+                console.warn(`Attempted to save invalid progress structure for key "${key}". Skipping save.`);
+                return;
+             }
+             window.localStorage.setItem(key, JSON.stringify(value));
+        }
     } catch (error) {
         console.error(`Error setting localStorage key “${key}”:`, error);
     }
@@ -73,9 +95,14 @@ const safelySetLocalStorage = (key: string, value: any) => {
 
 
 export const QuizProvider = ({ children }: { children: ReactNode }) => {
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [examHistory, setExamHistory] = useState<ExamRecord[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  // Load questions from localStorage on initial mount
+  const [questions, setQuestions] = useState<Question[]>(() =>
+    safelyGetLocalStorage<Question[]>(ALL_QUESTIONS_KEY, [])
+  );
+  const [examHistory, setExamHistory] = useState<ExamRecord[]>(() =>
+     safelyGetLocalStorage<ExamRecord[]>(EXAM_HISTORY_KEY, []).sort((a, b) => b.timestamp - a.timestamp)
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(false); // Initially not loading
 
   // --- Progress State ---
   const [practiceProgress, setPracticeProgress] = useState<PracticeProgress | null>(
@@ -84,6 +111,11 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   const [examProgress, setExamProgress] = useState<ExamProgress | null>(
     () => safelyGetLocalStorage<ExamProgress | null>(EXAM_PROGRESS_KEY, null)
   );
+
+   // --- Effect to Persist All Questions ---
+   useEffect(() => {
+     safelySetLocalStorage(ALL_QUESTIONS_KEY, questions);
+   }, [questions]);
 
   // --- Effects for Persisting Progress ---
   useEffect(() => {
@@ -94,19 +126,25 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
      safelySetLocalStorage(EXAM_PROGRESS_KEY, examProgress);
   }, [examProgress]);
 
+   // --- Effect for Persisting Exam History ---
+    useEffect(() => {
+     safelySetLocalStorage(EXAM_HISTORY_KEY, examHistory);
+   }, [examHistory]);
+
+
   // --- Functions to Clear Progress ---
    const clearPracticeProgress = useCallback(() => {
-    setPracticeProgress(null);
+    setPracticeProgress(null); // Set state to null
     if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(PRACTICE_PROGRESS_KEY);
+        window.localStorage.removeItem(PRACTICE_PROGRESS_KEY); // Remove from localStorage
     }
     console.log("Practice progress cleared.");
   }, []);
 
   const clearExamProgress = useCallback(() => {
-    setExamProgress(null);
+    setExamProgress(null); // Set state to null
      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(EXAM_PROGRESS_KEY);
+        window.localStorage.removeItem(EXAM_PROGRESS_KEY); // Remove from localStorage
     }
     console.log("Exam progress cleared.");
   }, []);
@@ -115,20 +153,15 @@ export const QuizProvider = ({ children }: { children: ReactNode }) => {
   // Function to add a new exam record
   const addExamRecord = useCallback((record: ExamRecord) => {
     setExamHistory(prev => {
+        // Avoid duplicates just in case
+        const exists = prev.some(r => r.id === record.id);
+        if (exists) return prev;
         const newState = [...prev, record].sort((a, b) => b.timestamp - a.timestamp); // Keep history sorted
-        // Optionally persist full history to localStorage if needed, but Firestore is primary
-        // safelySetLocalStorage('quizMasterExamHistory', newState);
         return newState;
     });
     // Clear exam progress after successfully saving/submitting
     clearExamProgress();
   }, [clearExamProgress]);
-
-   // Load history from localStorage on initial mount (optional, if not relying solely on Firestore fetch)
-    // useEffect(() => {
-    //     const loadedHistory = safelyGetLocalStorage<ExamRecord[]>('quizMasterExamHistory', []);
-    //     setExamHistory(loadedHistory.sort((a, b) => b.timestamp - a.timestamp));
-    // }, []);
 
 
   return (
