@@ -30,6 +30,7 @@ export default function PracticePage() {
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false); // Track initialization
+  const [shouldRedirect, setShouldRedirect] = useState(false); // State to trigger redirect effect
 
   // Derived state for the current question based on index
    const currentQuestion = practiceQuestions[currentQuestionIndex];
@@ -52,17 +53,24 @@ export default function PracticePage() {
         console.log("Practice session loaded from progress.", practiceProgress);
      } else {
          // No valid progress found (or context still loading)
-         // Only redirect if not loading and no progress found
+         // Only trigger redirect if not loading and no progress found
          if (!isContextLoading) {
              toast({
                  title: "No Practice Session",
                  description: "No active practice session found. Redirecting to configuration.",
                  variant: "destructive",
              });
-             router.replace('/practice/config'); // Use replace to avoid adding to history
+             setShouldRedirect(true); // Set state to trigger redirect effect
          }
      }
-  }, [practiceProgress, isContextLoading, router, toast]); // Depend on practiceProgress and context loading state
+  }, [practiceProgress, isContextLoading, toast]); // Remove router dependency here
+
+  // --- Redirect Effect ---
+   useEffect(() => {
+    if (shouldRedirect) {
+        router.replace('/practice/config'); // Use replace to avoid adding to history
+    }
+   }, [shouldRedirect, router]);
 
    // Effect to reset feedback when index changes *after* initialization
     useEffect(() => {
@@ -94,7 +102,7 @@ export default function PracticePage() {
             // Check if essential parts have changed compared to the existing progress state (prev)
             // This prevents unnecessary updates if the state object reference changes but content is the same.
              if (prev.currentIndex !== currentQuestionIndex ||
-                 prev.selections !== currentSelections || // Shallow compare is okay if handleAnswerChange ensures new object on change
+                 JSON.stringify(prev.selections) !== JSON.stringify(currentSelections) || // Deep compare selections
                  prev.questions !== practiceQuestions) { // Check if the question set changed (e.g., reconfigured)
                 // console.log("Practice progress updated in context/localStorage.");
                 return newState; // Return the new state object
@@ -225,23 +233,21 @@ export default function PracticePage() {
   const handleResetPractice = useCallback(() => {
     clearPracticeProgress(); // Clears context and localStorage
     toast({ title: "Practice Reset", description: "Your progress has been cleared. Redirecting to configuration." });
-    router.replace('/practice/config'); // Redirect to config after clearing
-  }, [clearPracticeProgress, router, toast]);
+    setShouldRedirect(true); // Trigger redirect effect after clearing
+  }, [clearPracticeProgress, toast]);
 
 
   // --- Render Logic ---
-  // Use isContextLoading to show loading state until context is ready
-  if (isContextLoading || (!isInitialized && !practiceProgress)) {
+  // Use isContextLoading or shouldRedirect to show loading/redirecting state
+  if (isContextLoading || shouldRedirect || (!isInitialized && !practiceProgress)) {
      return <div className="container mx-auto p-4 text-center">Loading practice session...</div>;
   }
 
-  // If initialized and currentQuestion is somehow still undefined (shouldn't happen with checks)
+  // If initialized and currentQuestion is somehow still undefined (should happen only if redirect isn't triggered fast enough)
   if (!currentQuestion) {
-      // This might happen momentarily if practiceProgress becomes null unexpectedly
-      console.error("Current question is undefined. Practice state might be inconsistent.");
-      // Don't toast immediately, maybe log and redirect gracefully
-      // toast({ title: "Error", description: "Could not load current question. Redirecting.", variant: "destructive"});
-      router.replace('/practice/config');
+      // This case should ideally be covered by the redirect logic now.
+      // If it still occurs, log an error but avoid rendering potentially broken UI.
+      console.error("Current question is undefined after initialization. Practice state might be inconsistent.");
       return <div className="container mx-auto p-4 text-center">Error loading question state...</div>;
   }
 
@@ -374,4 +380,3 @@ export default function PracticePage() {
     </div>
   );
 }
-
