@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation'; // Import useSearchParams
 import { useQuiz } from '@/context/QuizContext';
 import type { Question, UserAnswer, ExamRecord, ExamProgress } from '@/types/quiz';
 import { QuestionCard } from '@/components/quiz/QuestionCard';
@@ -13,16 +13,46 @@ import { ArrowLeft, ArrowRight, CheckCircle, Home, List, LogOut } from 'lucide-r
 import { Card, CardContent } from '@/components/ui/card';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { QuizOverview } from '@/components/quiz/QuizOverview';
-import { saveExamRecord } from '@/services/firestoreService';
+// import { saveExamRecord } from '@/services/firestoreService'; // Temporarily disable Firestore
 import { useToast } from "@/hooks/use-toast";
 import { shuffleArray } from '@/lib/utils'; // Make sure shuffleArray is imported
 import { Skeleton } from '@/components/ui/skeleton'; // Import Skeleton
 
-export default function ExamTakePage({searchParams}: {searchParams: { numQuestions?: string }}) { // Added type for searchParams
+// Helper function to sanitize data for saving (ensure no undefined values)
+const sanitizeForStorage = (data: any): any => {
+  if (data === undefined) {
+    return null; // Replace undefined with null
+  }
+  if (Array.isArray(data)) {
+    return data.map(sanitizeForStorage);
+  }
+  if (typeof data === 'object' && data !== null) {
+    const sanitizedObject: Record<string, any> = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+         const value = data[key];
+         // Only include the key if the sanitized value is not null
+         // (or explicitly allow nulls if needed by your schema)
+         const sanitizedValue = sanitizeForStorage(value);
+         // Keep nulls, but skip undefined
+         if (sanitizedValue !== undefined) {
+            sanitizedObject[key] = sanitizedValue;
+         }
+      }
+    }
+    return sanitizedObject;
+  }
+  return data;
+};
+
+
+export default function ExamTakePage(/* Remove props: {searchParams}: {searchParams?: { numQuestions?: string }} */) {
   const { questions: allQuestions, addExamRecord, examProgress, setExamProgress, clearExamProgress, isLoading: isContextLoading, isInitialized: isContextInitialized } = useQuiz();
   const router = useRouter();
   const { toast } = useToast();
-  const requestedNumQuestionsParam = searchParams?.numQuestions; // Use optional chaining
+  const searchParams = useSearchParams(); // Use the hook
+  const requestedNumQuestionsParam = searchParams.get('numQuestions'); // Get the value using .get()
+
 
   // --- State Initialization ---
   // Initialize with empty/default values, setup will happen in useEffect
@@ -31,6 +61,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
   const [userAnswers, setUserAnswers] = useState<Record<number, UserAnswer>>({});
   const [examStartTime, setExamStartTime] = useState<number>(Date.now());
   const [configNumQuestions, setConfigNumQuestions] = useState<number>(0);
+  const [examRange, setExamRange] = useState<{ start: number; end: number } | null>(null); // Add state for exam range
 
   // Track if setup has run *in this component instance* to prevent duplicate setup
   const [isLocallyInitialized, setIsLocallyInitialized] = useState(false);
@@ -51,15 +82,16 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
 
     // Check if we should RESUME an exam
     if (examProgress && !requestedNumQuestionsParam) {
-      const { questions, currentIndex, answers, startTime, configNumQuestions: savedConfigNum } = examProgress;
+      const { questions, currentIndex, answers, startTime, configNumQuestions: savedConfigNum, range } = examProgress;
        // Basic validation of progress structure
        if (Array.isArray(questions) && questions.length > 0 && typeof currentIndex === 'number' && typeof answers === 'object' && typeof startTime === 'number') {
-            console.log(`ExamTakePage: Resuming exam with ${questions.length} questions at index ${currentIndex}.`);
+            console.log(`ExamTakePage: Loading exam from context with ${questions.length} questions at index ${currentIndex}. Range: ${range ? `${range.start}-${range.end}` : 'N/A'}`);
             setExamQuestions(questions);
             setCurrentQuestionIndex(currentIndex);
             setUserAnswers(answers);
             setExamStartTime(startTime);
             setConfigNumQuestions(savedConfigNum ?? questions.length); // Fallback if configNumQuestions missing
+            setExamRange(range ?? null); // Load range
             setIsLocallyInitialized(true); // Mark local initialization complete
        } else {
             // Invalid progress structure found
@@ -72,6 +104,24 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
     // Check if we should START a NEW exam (explicitly requested via query param)
     else if (requestedNumQuestionsParam && allQuestions.length > 0) {
          console.log("ExamTakePage: Starting new exam based on query parameter.");
+
+         // Get range from query params if present
+         const rangeStartParam = searchParams.get('rangeStart');
+         const rangeEndParam = searchParams.get('rangeEnd');
+         let potentialRange: { start: number; end: number } | null = null;
+
+         if (rangeStartParam && rangeEndParam) {
+            const start = parseInt(rangeStartParam, 10);
+            const end = parseInt(rangeEndParam, 10);
+            if (!isNaN(start) && !isNaN(end) && start <= end) {
+                 potentialRange = { start, end };
+                 console.log(`ExamTakePage: Exam range specified: ${start}-${end}`);
+            } else {
+                 console.warn("ExamTakePage: Invalid range parameters provided. Ignoring range.");
+            }
+         }
+
+
         const requestedNum = parseInt(requestedNumQuestionsParam, 10);
         if (isNaN(requestedNum) || requestedNum <= 0) {
             console.error("ExamTakePage: Invalid number of questions requested:", requestedNumQuestionsParam);
@@ -80,22 +130,39 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
             return; // Exit effect
         }
 
-        const numToTake = Math.min(requestedNum, allQuestions.length);
+
+         // Determine the pool of questions based on range or all questions
+         let questionPool = [...allQuestions];
+         if (potentialRange) {
+            questionPool = allQuestions.filter(q =>
+                q.question_number >= potentialRange!.start && q.question_number <= potentialRange!.end
+            );
+             console.log(`ExamTakePage: Filtered question pool by range ${potentialRange.start}-${potentialRange.end}. Pool size: ${questionPool.length}`);
+             if (questionPool.length === 0) {
+                 toast({ title: "Range Error", description: `No questions found in the specified range (${potentialRange.start}-${potentialRange.end}). Please adjust the range.`, variant: "destructive", duration: 7000 });
+                 router.replace('/exam/config');
+                 return;
+             }
+         } else {
+             console.log("ExamTakePage: Using all available questions as the pool.");
+         }
+
+
+        const numToTake = Math.min(requestedNum, questionPool.length);
         if (numToTake === 0) {
             console.warn("ExamTakePage: Cannot start exam with zero questions.");
-            toast({ title: "No Questions Available", description: "Cannot start exam with zero questions.", variant: "destructive" });
-             router.replace('/'); // Redirect home if no questions
+            toast({ title: "No Questions Available", description: "Cannot start exam with zero questions (or zero in selected range).", variant: "destructive" });
+             router.replace(potentialRange ? '/exam/config' : '/'); // Go back to config if range was used, else home
              return;
         }
 
         // Clear any old progress before starting new
-        // Note: Config page might have already done this, but ensures clean state here
         if (examProgress) {
             console.log("ExamTakePage: Clearing existing exam progress before starting new one.");
             clearExamProgress();
         }
 
-        const shuffled = shuffleArray(allQuestions);
+        const shuffled = shuffleArray(questionPool);
         const selectedQuestions = shuffled.slice(0, numToTake);
         const startTime = Date.now();
         const initialAnswers: Record<number, UserAnswer> = {};
@@ -103,12 +170,13 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
            initialAnswers[q.question_number] = { question_number: q.question_number, selected_answers: [] };
          });
 
-        console.log(`ExamTakePage: Initializing new exam with ${numToTake} questions.`);
+        console.log(`ExamTakePage: Initializing new exam with ${numToTake} questions. ${potentialRange ? `(Range: ${potentialRange.start}-${potentialRange.end})` : '(No Range)'}`);
         setExamQuestions(selectedQuestions);
         setCurrentQuestionIndex(0);
         setUserAnswers(initialAnswers);
         setExamStartTime(startTime);
         setConfigNumQuestions(numToTake); // Store the actual number taken
+        setExamRange(potentialRange); // Store the selected range (or null)
         setIsLocallyInitialized(true); // Mark local initialization complete
 
         // Save initial state to context/localStorage immediately
@@ -118,6 +186,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
             answers: initialAnswers,
             startTime: startTime,
             configNumQuestions: numToTake,
+            range: potentialRange, // Save range to progress
          });
          console.log("ExamTakePage: New exam progress saved to context.");
 
@@ -152,7 +221,8 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
       clearExamProgress,
       isContextLoading,
       isContextInitialized,
-      isLocallyInitialized // Depend on local init state
+      isLocallyInitialized, // Depend on local init state
+      searchParams // Add searchParams as dependency
   ]);
 
 
@@ -161,48 +231,35 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
      // Only save progress if the exam is locally initialized and has questions
      if (isLocallyInitialized && examQuestions.length > 0) {
          // Check if examProgress is actually defined before trying to update
-         if (examProgress) {
+         if (examProgress !== undefined) { // Allow saving even if it's null initially
              setExamProgress(prev => {
-                // Ensure prev is not null/undefined before spreading
+                const currentState: ExamProgress = {
+                    questions: examQuestions,
+                    startTime: examStartTime,
+                    configNumQuestions: configNumQuestions,
+                    range: examRange, // Save range
+                    currentIndex: currentQuestionIndex,
+                    answers: userAnswers,
+                };
+
+                 // Ensure prev is not null/undefined before spreading/comparing
                  if (!prev) {
-                     console.warn("ExamTakePage: Attempted to save progress, but previous progress state was null. Re-initializing.");
-                     // This might indicate a race condition or error, re-save the full current state
-                     return {
-                         questions: examQuestions,
-                         startTime: examStartTime,
-                         configNumQuestions: configNumQuestions,
-                         currentIndex: currentQuestionIndex,
-                         answers: userAnswers,
-                     };
+                     // console.warn("ExamTakePage: Attempted to save progress, but previous progress state was null/undefined. Saving current state.");
+                     return currentState;
                  }
 
-                 const newState: ExamProgress = {
-                     ...prev, // Keep potentially other fields from prev if any
-                     questions: examQuestions, // Always save current questions
-                     startTime: examStartTime, // Always save current start time
-                     configNumQuestions: configNumQuestions, // Always save current config
-                     currentIndex: currentQuestionIndex,
-                     answers: userAnswers,
-                 };
-
                  // Simple comparison to avoid unnecessary updates if nothing changed
-                 if (prev.currentIndex !== newState.currentIndex || JSON.stringify(prev.answers) !== JSON.stringify(newState.answers)) {
+                 if (prev.currentIndex !== currentState.currentIndex ||
+                     JSON.stringify(prev.answers) !== JSON.stringify(currentState.answers) ||
+                     prev.range?.start !== currentState.range?.start || // Compare range too
+                     prev.range?.end !== currentState.range?.end)
+                 {
                     // console.log("ExamTakePage: Saving updated exam progress to context.");
-                    return newState;
+                    return currentState;
                  }
                  // console.log("ExamTakePage: Skipping progress save, no change detected.");
                  return prev; // No change needed
              });
-         } else {
-             // If examProgress is null, save the initial state again (should have happened in init effect, but safeguard)
-              console.warn("ExamTakePage: examProgress was null during save attempt. Saving current state.");
-              setExamProgress({
-                  questions: examQuestions,
-                  startTime: examStartTime,
-                  configNumQuestions: configNumQuestions,
-                  currentIndex: currentQuestionIndex,
-                  answers: userAnswers,
-              });
          }
      }
    }, [
@@ -213,7 +270,8 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
        examQuestions, // Include as dependency
        examStartTime, // Include as dependency
        configNumQuestions, // Include as dependency
-       examProgress // Include examProgress to react to it becoming available/null
+       examRange, // Include range
+       examProgress // Include examProgress to react to it becoming available/null/undefined
    ]);
 
 
@@ -284,10 +342,13 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
      try {
          let correctCount = 0;
          const incorrectQuestionsDetail = [];
+         console.log("ExamTakePage: [handleSubmitExam] Exam questions:", examQuestions.map(q => q.question_number));
+         console.log("ExamTakePage: [handleSubmitExam] User answers:", userAnswers);
 
          console.log("ExamTakePage: [handleSubmitExam] Calculating score...");
          for (const question of examQuestions) {
-           const userAnswer = userAnswers[question.question_number];
+            const questionNum = question.question_number;
+           const userAnswer = userAnswers[questionNum];
            const selected = userAnswer?.selected_answers || [];
            const correct = [...question.correct_answer].sort();
            const sortedSelected = [...selected].sort();
@@ -297,15 +358,17 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
            if (isCorrect) {
              correctCount++;
            } else {
-             incorrectQuestionsDetail.push({
-               question_number: question.question_number,
-               question_text: question.question_text,
-               options: question.options,
-               user_answer: sortedSelected,
-               correct_answer: correct,
-               explanation: question.explanation,
-               image_url: question.image_url,
-             });
+                const incorrectDetail = {
+                   question_number: questionNum,
+                   question_text: question.question_text,
+                   options: question.options,
+                   user_answer: sortedSelected,
+                   correct_answer: correct,
+                   explanation: question.explanation,
+                   image_url: question.image_url, // Include image_url
+                 };
+                 incorrectQuestionsDetail.push(incorrectDetail);
+                 console.log(`[handleSubmitExam] Incorrect question details for Q#${questionNum}:`, incorrectDetail);
            }
          }
          console.log(`ExamTakePage: [handleSubmitExam] Correct count: ${correctCount}`);
@@ -316,34 +379,56 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
          const duration = examStartTime && examStartTime > 0 ? Math.round((examEndTime - examStartTime) / 1000) : 0; // Duration in seconds
          console.log(`ExamTakePage: [handleSubmitExam] Score calculated: ${score.toFixed(2)}%, Duration: ${duration}s`);
 
-         const recordData = {
-           userId: 'anonymous', // TODO: Replace with actual user ID if authentication is added
-           score: parseFloat(score.toFixed(2)),
-           totalQuestions: examQuestions.length,
-           correctCount: correctCount,
-           incorrectQuestions: incorrectQuestionsDetail,
-           duration: duration,
-           // timestamp is handled by Firestore or context.addExamRecord
-         };
+          // Prepare data for saving - crucially, sanitize it first!
+          const rawRecordData = {
+            userId: 'anonymous', // TODO: Replace with actual user ID if authentication is added
+            score: parseFloat(score.toFixed(2)),
+            totalQuestions: examQuestions.length,
+            correctCount: correctCount,
+            incorrectQuestions: incorrectQuestionsDetail,
+            duration: duration,
+            range: examRange, // Include the range used for the exam
+          };
 
-         console.log("ExamTakePage: [handleSubmitExam] Prepared record data:", recordData);
-         console.log("ExamTakePage: [handleSubmitExam] Saving exam record to Firestore...");
-         const docId = await saveExamRecord(recordData);
-         console.log(`ExamTakePage: [handleSubmitExam] Firestore save successful. Document ID: ${docId}`);
+         // **Sanitize the data before saving**
+         const recordDataToSave = sanitizeForStorage(rawRecordData);
+         console.log("ExamTakePage: [handleSubmitExam] Prepared record data for saving:", recordDataToSave);
+
+         // Temporarily disable Firestore saving
+         // console.log("ExamTakePage: [handleSubmitExam] Saving exam record locally...");
+         const tempDocId = `local-${Date.now()}`;
+         // const docId = await saveExamRecord(recordDataToSave);
+         // console.log(`ExamTakePage: [handleSubmitExam] Local save successful. Temporary ID: ${tempDocId}`);
+         // console.log(`ExamTakePage: [handleSubmitExam] Firestore save successful. Document ID: ${docId}`);
+
 
          const finalTimestamp = Date.now(); // Use final submission time for local record consistency
          const fullRecord: ExamRecord = {
-           ...recordData,
-           id: docId,
-           timestamp: finalTimestamp,
+            id: tempDocId, // Use temporary ID
+            userId: recordDataToSave.userId,
+            score: recordDataToSave.score,
+            totalQuestions: recordDataToSave.totalQuestions,
+            correctCount: recordDataToSave.correctCount,
+            incorrectQuestions: recordDataToSave.incorrectQuestions || [],
+            duration: recordDataToSave.duration,
+            range: recordDataToSave.range, // Save the range
+            timestamp: finalTimestamp,
          };
-         console.log("ExamTakePage: [handleSubmitExam] Adding exam record to context history:", fullRecord);
-         addExamRecord(fullRecord); // This should also clear examProgress via context
+
+         // Sanitize one more time before adding to context (belt and suspenders)
+          const finalSanitizedRecord = sanitizeForStorage(fullRecord);
+          if (!finalSanitizedRecord) {
+              throw new Error("Failed to sanitize the final record before adding to context.");
+          }
+
+
+         console.log("ExamTakePage: [handleSubmitExam] Adding exam record to context history:", finalSanitizedRecord);
+         addExamRecord(finalSanitizedRecord); // Clears examProgress via context
          console.log("ExamTakePage: [handleSubmitExam] Context updated.");
 
          toast({ title: "Submission Successful!", description: `Score: ${score.toFixed(1)}%`, variant: "default" });
          console.log("ExamTakePage: [handleSubmitExam] Navigating to results page...");
-         router.push(`/exam/results?recordId=${docId}`);
+         router.push(`/exam/results?recordId=${tempDocId}`);
 
      } catch (error) {
          console.error("ExamTakePage: [handleSubmitExam] Failed to save exam record during submission:", error);
@@ -362,6 +447,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
       examQuestions,
       userAnswers,
       examStartTime,
+      examRange, // Include range
       addExamRecord,
       router,
       toast,
@@ -449,7 +535,7 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
       <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
         <SheetTrigger asChild>
           <Button variant="outline" className="absolute top-4 right-4 z-20" disabled={isSubmitting}>
-            <List className="mr-2 h-4 w-4" /> Overview
+            <List className="mr-2 h-4 w-4" /> Overview ({currentQuestionIndex + 1}/{examQuestions.length})
           </Button>
         </SheetTrigger>
         <SheetContent className="w-[300px] sm:w-[400px]">
@@ -466,7 +552,12 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
         </SheetContent>
       </Sheet>
 
-      <h1 className="text-3xl font-bold mb-4 mt-12">Exam Mode</h1>
+      <h1 className="text-3xl font-bold mb-1 mt-12">Exam Mode</h1>
+       {examRange && (
+           <p className="text-sm text-muted-foreground mb-4">
+                (Range: {examRange.start}-{examRange.end})
+           </p>
+       )}
       <div className="w-full max-w-4xl mb-4">
         <Progress value={progress} className="w-full h-2" />
         <p className="text-sm text-muted-foreground text-center mt-1">
@@ -530,3 +621,4 @@ export default function ExamTakePage({searchParams}: {searchParams: { numQuestio
     </div>
   );
 }
+
